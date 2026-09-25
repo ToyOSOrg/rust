@@ -158,12 +158,26 @@ impl Command {
         Err(io::Error::from(io::ErrorKind::NotFound))
     }
 
+    /// The directory the child starts in, always absolute: the kernel starts a
+    /// child only where its spawn says, and a relative `cwd` is relative to ours.
+    fn child_cwd(&self) -> io::Result<String> {
+        let dir = match &self.cwd {
+            Some(dir) if Path::new(dir).is_absolute() => Path::new(dir).to_path_buf(),
+            Some(dir) => crate::env::current_dir()?.join(dir),
+            None => crate::env::current_dir()?,
+        };
+        dir.into_os_string().into_string().map_err(|_| {
+            io::const_error!(io::ErrorKind::InvalidInput, "working directory is not UTF-8")
+        })
+    }
+
     pub fn spawn(
         &mut self,
         default: Stdio,
         _needs_stdin: bool,
     ) -> io::Result<(Process, StdioPipes)> {
         let resolved = self.resolve_program()?;
+        let cwd = self.child_cwd()?;
         let mut argv_buf = Vec::new();
         argv_buf.extend_from_slice(resolved.as_encoded_bytes());
         for arg in &self.args[1..] {
@@ -235,7 +249,7 @@ impl Command {
         // inheritance, which is what a program endowed nothing should get.
         let decided = !self.endowments.is_empty() || !self.extra_slots.is_empty();
         if !decided {
-            if let Some(process) = self.launch(&resolved, &argv_buf, &env_buf, &slot_map)? {
+            if let Some(process) = self.launch(&resolved, &argv_buf, &env_buf, &cwd, &slot_map)? {
                 drop(child_pipes);
                 return Ok((
                     process,
@@ -255,6 +269,8 @@ impl Command {
             endow_count: endow.len() as u64,
             labels_ptr: labels.as_ptr().expose_provenance() as u64,
             labels_len: labels.len() as u64,
+            cwd_ptr: cwd.as_ptr().expose_provenance() as u64,
+            cwd_len: cwd.len() as u64,
         };
         // SAFETY: spawn_args contains valid pointers to stack-local buffers that outlive the call.
         let spawned = unsafe { toyos_abi::syscall::spawn(&spawn_args) };
@@ -293,6 +309,7 @@ impl Command {
         resolved: &OsStr,
         argv: &[u8],
         env: &[u8],
+        cwd: &str,
         slot_map: &[[u32; 2]],
     ) -> io::Result<Option<Process>> {
         use toyos::launch::{
@@ -338,15 +355,7 @@ impl Command {
             .iter()
             .map(|(name, handle)| (name.as_str(), toyos_abi::RawHandle(*handle)))
             .collect();
-        let cwd =
-            self.cwd.as_ref().and_then(|c| c.to_str()).map(String::from).unwrap_or_else(|| {
-                crate::env::current_dir()
-                    .ok()
-                    .and_then(|p| p.to_str().map(String::from))
-                    .unwrap_or_else(|| String::from("/"))
-            });
-
-        let request = Launch { program, argv, env, cwd: &cwd, extras: &extras, slots: &slots };
+        let request = Launch { program, argv, env, cwd, extras: &extras, slots: &slots };
         let answer = launch::launch(&conn, &request);
 
         // **The send moved them.** Every arm below but `NotSent` is past the
