@@ -1,15 +1,10 @@
-use crate::spec::{Arch, Cc, LinkerFlavor, Lld, StackProbeType, Target, TargetMetadata, base};
+use crate::spec::{Arch, StackProbeType, Target, TargetMetadata, base};
 
 pub(crate) fn target() -> Target {
     let mut opts = base::toyos::opts();
     opts.cpu = "x86-64".into();
     opts.max_atomic_width = Some(64);
     opts.stack_probes = StackProbeType::Inline;
-    opts.linker = Some("rust-lld".into());
-    opts.linker_flavor = LinkerFlavor::Gnu(Cc::No, Lld::Yes);
-    // ToyOS has no symbol interposition: a shared object binds its own
-    // definitions when it is linked.
-    opts.add_pre_link_args(LinkerFlavor::Gnu(Cc::No, Lld::No), &["-Bsymbolic"]);
 
     Target {
         llvm_target: "x86_64-unknown-none-elf".into(),
