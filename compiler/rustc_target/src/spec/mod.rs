@@ -1787,6 +1787,7 @@ supported_targets! {
     ("x86_64-unknown-none", x86_64_unknown_none),
 
     ("x86_64-unknown-toyos", x86_64_unknown_toyos),
+    ("aarch64-unknown-toyos", aarch64_unknown_toyos),
 
     ("aarch64-unknown-teeos", aarch64_unknown_teeos),
 
