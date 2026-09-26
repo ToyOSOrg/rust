@@ -1,4 +1,5 @@
 use super::env::{CommandEnv, CommandEnvs, CommandResolvedEnvs};
+use crate::collections::BTreeMap;
 pub use crate::ffi::OsString as EnvKey;
 use crate::ffi::{OsStr, OsString};
 use crate::num::NonZero;
@@ -24,6 +25,26 @@ pub struct Command {
     extra_slots: Vec<[u32; 2]>,
     endowments: Vec<(String, u32)>,
     provided: Vec<(String, u32)>,
+}
+
+/// Where a spawn goes once the launcher has been asked, or could not be.
+enum Routed {
+    /// init started it.
+    Started(Process),
+    /// This process spawns it, with the `HOME` init answered for it if it did.
+    Direct { home: Option<OsString> },
+}
+
+/// `KEY=VALUE\0` for each variable: the blob `SYS_SPAWN` and a launch both take.
+fn env_blob(env: &BTreeMap<EnvKey, OsString>) -> Vec<u8> {
+    let mut blob = Vec::new();
+    for (key, value) in env {
+        blob.extend_from_slice(key.as_encoded_bytes());
+        blob.push(b'=');
+        blob.extend_from_slice(value.as_encoded_bytes());
+        blob.push(0);
+    }
+    blob
 }
 
 #[derive(Debug)]
@@ -203,15 +224,8 @@ impl Command {
         // Add extra handle mappings (e.g., for jobserver pipes)
         slot_map.extend_from_slice(&self.extra_slots);
 
-        // Build environment: serialize all env vars as KEY=VALUE\0KEY2=VALUE2\0...
-        let mut env_buf = Vec::new();
         let capture = self.env.capture();
-        for (key, value) in capture.iter() {
-            env_buf.extend_from_slice(key.as_encoded_bytes());
-            env_buf.push(b'=');
-            env_buf.extend_from_slice(value.as_encoded_bytes());
-            env_buf.push(0);
-        }
+        let env_buf = env_blob(&capture);
 
         // The label blob and the entries that index it. Built here because the
         // kernel reads both out of one call and keeps the blob for the child's
@@ -246,17 +260,23 @@ impl Command {
         // a manifest row — so those spawn directly. Everything else asks the
         // launcher when it holds one, and falls back for a program the image
         // does not declare. A caller with no `launcher` connector gets plain
-        // inheritance, which is what a program endowed nothing should get.
+        // inheritance, which is what a program endowed nothing should get —
+        // of everything but `HOME` (`direct_env`).
         let decided = !self.endowments.is_empty() || !self.extra_slots.is_empty();
+        let mut home_from_init = None;
         if !decided {
-            if let Some(process) = self.launch(&resolved, &argv_buf, &env_buf, &cwd, &slot_map)? {
-                drop(child_pipes);
-                return Ok((
-                    process,
-                    StdioPipes { stdin: stdin_pipe, stdout: stdout_pipe, stderr: stderr_pipe },
-                ));
+            match self.launch(&resolved, &argv_buf, &env_buf, &cwd, &slot_map)? {
+                Routed::Started(process) => {
+                    drop(child_pipes);
+                    return Ok((
+                        process,
+                        StdioPipes { stdin: stdin_pipe, stdout: stdout_pipe, stderr: stderr_pipe },
+                    ));
+                }
+                Routed::Direct { home } => home_from_init = home,
             }
         }
+        let env_buf = env_blob(&self.direct_env(capture, home_from_init));
 
         let spawn_args = toyos_abi::syscall::SpawnArgs {
             argv_ptr: argv_buf.as_ptr().expose_provenance() as u64,
@@ -299,8 +319,37 @@ impl Command {
         ))
     }
 
-    /// Ask `/bin/init` to start this program, or answer `None` for a caller
-    /// that cannot or a program the manifest does not declare.
+    /// The environment a direct spawn carries: the caller's, except `HOME`.
+    ///
+    /// **A direct child's `HOME` is one its caller named or one init answered
+    /// for it, never the one this process was started with.** init decides
+    /// every program's `HOME` from its row, and a service's is its own
+    /// `/state/<name>`: a child init never saw would otherwise carry a location
+    /// decided for its parent alone.
+    fn direct_env(
+        &self,
+        mut env: BTreeMap<EnvKey, OsString>,
+        from_init: Option<OsString>,
+    ) -> BTreeMap<EnvKey, OsString> {
+        let home = OsStr::new("HOME");
+        let named = self.env.iter().find(|(key, _)| *key == home).map(|(_, value)| value);
+        env.remove(home);
+        match named {
+            Some(Some(value)) => {
+                env.insert(home.to_owned(), value.to_owned());
+            }
+            Some(None) => {}
+            None => {
+                if let Some(value) = from_init {
+                    env.insert(home.to_owned(), value);
+                }
+            }
+        }
+        env
+    }
+
+    /// Ask `/bin/init` to start this program, or answer [`Routed::Direct`] for
+    /// a caller that cannot or a program the manifest does not declare.
     ///
     /// The stdio handles are **duplicated** before they go: a launch moves what
     /// it carries, and `Stdio::Inherit` names the parent's own slot 1.
@@ -311,7 +360,7 @@ impl Command {
         env: &[u8],
         cwd: &str,
         slot_map: &[[u32; 2]],
-    ) -> io::Result<Option<Process>> {
+    ) -> io::Result<Routed> {
         use toyos::launch::{
             self, Launch, LaunchError, MAX_LAUNCH_EXTRAS, MAX_LAUNCH_SLOTS, Outcome,
         };
@@ -322,7 +371,7 @@ impl Command {
         // still be what the caller asked for.
         let Ok(conn) = toyos::endow::service("launcher") else {
             return if self.provided.is_empty() {
-                Ok(None)
+                Ok(Routed::Direct { home: None })
             } else {
                 Err(io::Error::from(io::ErrorKind::PermissionDenied))
             };
@@ -335,7 +384,7 @@ impl Command {
         let program = resolved.to_str().unwrap_or("");
 
         if self.provided.len() > MAX_LAUNCH_EXTRAS || slot_map.len() > MAX_LAUNCH_SLOTS {
-            return Ok(None);
+            return Ok(Routed::Direct { home: None });
         }
 
         let mut slots: Vec<(u32, toyos_abi::RawHandle)> = Vec::with_capacity(slot_map.len());
@@ -346,7 +395,7 @@ impl Command {
                     for (_, h) in &slots {
                         toyos_abi::syscall::close(*h);
                     }
-                    return Ok(None);
+                    return Ok(Routed::Direct { home: None });
                 }
             }
         }
@@ -356,7 +405,8 @@ impl Command {
             .map(|(name, handle)| (name.as_str(), toyos_abi::RawHandle(*handle)))
             .collect();
         let request = Launch { program, argv, env, cwd, extras: &extras, slots: &slots };
-        let answer = launch::launch(&conn, &request);
+        let mut home = crate::vec![0u8; toyos::ipc::MAX_FRAME_LEN as usize];
+        let answer = launch::launch(&conn, &request, &mut home);
 
         // **The send moved them.** Every arm below but `NotSent` is past the
         // point where these duplicates left this table, so closing them here
@@ -365,7 +415,9 @@ impl Command {
         match answer {
             Ok(Outcome::Started(handle)) => {
                 // SAFETY: init moved this handle into our table and holds none.
-                Ok(Some(Process { handle: unsafe { toyos::process::Process::from_raw(handle) } }))
+                Ok(Routed::Started(Process {
+                    handle: unsafe { toyos::process::Process::from_raw(handle) },
+                }))
             }
             // The direct path, which is what §4.5 clause 2 says an undeclared
             // program gets. A caller that transferred connectors loses nothing
@@ -376,7 +428,9 @@ impl Command {
             // tree needs it, and
             // `issues/isolation/a-provided-name-cannot-reach-an-undeclared-child.md`
             // is where that is written down.
-            Ok(Outcome::NotDeclared) => Ok(None),
+            // It carries the `HOME` init decided for the program, which the
+            // direct spawn hands on in place of this process's own.
+            Ok(Outcome::NotDeclared { home }) => Ok(Routed::Direct { home: Some(home.into()) }),
             Ok(Outcome::Refused) | Err(LaunchError::Sent(_)) => {
                 Err(io::Error::from(io::ErrorKind::Other))
             }
@@ -384,7 +438,7 @@ impl Command {
                 for (_, h) in &slots {
                     toyos_abi::syscall::close(*h);
                 }
-                Ok(None)
+                Ok(Routed::Direct { home: None })
             }
         }
     }

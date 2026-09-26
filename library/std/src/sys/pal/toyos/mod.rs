@@ -39,17 +39,34 @@ pub fn to_io_error(e: toyos_abi::syscall::SyscallError) -> crate::io::Error {
 pub(crate) static ARGC: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static ARGV: AtomicUsize = AtomicUsize::new(0); // *const *const u8 as usize
 
+// Stack layout at entry (set up by kernel), with the stack pointer 16-byte aligned:
+//   [sp]   = argc
+//   [sp+8] = argv[0], argv[1], ..., NULL
+#[cfg(target_arch = "x86_64")]
 #[unsafe(no_mangle)]
 #[unsafe(naked)]
 unsafe extern "C" fn _start() -> ! {
-    // Stack layout at entry (set up by kernel):
-    //   [RSP]   = argc
-    //   [RSP+8] = argv[0], argv[1], ..., NULL
     core::arch::naked_asm!(
         "mov rdi, [rsp]",
         "lea rsi, [rsp + 8]",
         "call {start_rust}",
         "ud2",
+        start_rust = sym start_rust,
+    );
+}
+
+#[cfg(target_arch = "aarch64")]
+#[unsafe(no_mangle)]
+#[unsafe(naked)]
+unsafe extern "C" fn _start() -> ! {
+    core::arch::naked_asm!(
+        "ldr x0, [sp]",
+        "add x1, sp, #8",
+        // The outermost frame record: a backtrace ends here.
+        "mov x29, xzr",
+        "mov x30, xzr",
+        "bl {start_rust}",
+        "brk #0x1",
         start_rust = sym start_rust,
     );
 }
@@ -76,12 +93,8 @@ extern "C" fn start_rust(argc: usize, argv: *const *const u8) -> ! {
     // Register EH frame finder (also in .init_array for cdylib, but exes don't run .init_array)
     eh_frame::init();
 
-    // Initialize environment variables and seed defaults
+    // Initialize environment variables
     crate::sys::env::init();
-    unsafe {
-        crate::sys::env::setenv("HOME".as_ref(), "/home/root".as_ref()).ok();
-        crate::sys::env::setenv("XDG_CONFIG_HOME".as_ref(), "/home/root/.config".as_ref()).ok();
-    }
 
     let code = unsafe { main(argc as i32, argv) };
     toyos_abi::syscall::exit(code)
