@@ -93,12 +93,8 @@ extern "C" fn start_rust(argc: usize, argv: *const *const u8) -> ! {
     // Register EH frame finder (also in .init_array for cdylib, but exes don't run .init_array)
     eh_frame::init();
 
-    // Initialize environment variables and seed defaults
+    // Initialize environment variables
     crate::sys::env::init();
-    unsafe {
-        crate::sys::env::setenv("HOME".as_ref(), "/home/root".as_ref()).ok();
-        crate::sys::env::setenv("XDG_CONFIG_HOME".as_ref(), "/home/root/.config".as_ref()).ok();
-    }
 
     let code = unsafe { main(argc as i32, argv) };
     crate::sys::stdio::finish();
