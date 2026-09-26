@@ -219,9 +219,9 @@ pub fn panic_output() -> Option<Stderr> {
 }
 
 /// What either stream holds of a line the process has not ended, written out
-/// as the process leaves: a stream that is a log ring keeps a partial line
-/// until its newline.
+/// as that line's end as the process leaves: a stream that is a log ring
+/// keeps a partial line until its newline.
 pub fn finish() {
-    log_stdio::flush(Stream::Out);
-    log_stdio::flush(Stream::Err);
+    log_stdio::end(Stream::Out);
+    log_stdio::end(Stream::Err);
 }
