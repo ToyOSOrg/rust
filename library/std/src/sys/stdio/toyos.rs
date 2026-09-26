@@ -1,5 +1,6 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use toyos::log::stdio::{self as log_stdio, Stream};
 use toyos_abi::RawHandle;
 use toyos_abi::syscall::{self, FileType};
 
@@ -7,8 +8,6 @@ use crate::io::{self, IoSlice, IoSliceMut};
 use crate::sys::to_io_error;
 
 const STDIN: RawHandle = RawHandle(0);
-const STDOUT: RawHandle = RawHandle(1);
-const STDERR: RawHandle = RawHandle(2);
 
 // ---------------------------------------------------------------------------
 // Stdin mode flag (canonical by default, raw when explicitly switched)
@@ -43,7 +42,7 @@ fn read_one() -> io::Result<u8> {
 }
 
 fn echo(bytes: &[u8]) {
-    let _ = syscall::write(STDOUT, bytes);
+    let _ = log_stdio::write(Stream::Out, bytes);
 }
 
 /// Canonical read: line editing with echo. Buffers a complete line, then
@@ -159,7 +158,7 @@ impl Stdout {
 
 impl io::Write for Stdout {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        syscall::write(STDOUT, buf).map_err(to_io_error)
+        log_stdio::write(Stream::Out, buf).map_err(to_io_error)
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
@@ -175,6 +174,7 @@ impl io::Write for Stdout {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        log_stdio::flush(Stream::Out);
         Ok(())
     }
 }
@@ -187,7 +187,7 @@ impl Stderr {
 
 impl io::Write for Stderr {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        syscall::write(STDERR, buf).map_err(to_io_error)
+        log_stdio::write(Stream::Err, buf).map_err(to_io_error)
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
@@ -203,6 +203,7 @@ impl io::Write for Stderr {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        log_stdio::flush(Stream::Err);
         Ok(())
     }
 }
@@ -215,4 +216,12 @@ pub fn is_ebadf(_err: &io::Error) -> bool {
 
 pub fn panic_output() -> Option<Stderr> {
     Some(Stderr::new())
+}
+
+/// What either stream holds of a line the process has not ended, written out
+/// as that line's end as the process leaves: a stream that is a log ring
+/// keeps a partial line until its newline.
+pub fn finish() {
+    log_stdio::end(Stream::Out);
+    log_stdio::end(Stream::Err);
 }

@@ -101,6 +101,7 @@ extern "C" fn start_rust(argc: usize, argv: *const *const u8) -> ! {
     }
 
     let code = unsafe { main(argc as i32, argv) };
+    crate::sys::stdio::finish();
     toyos_abi::syscall::exit(code)
 }
 

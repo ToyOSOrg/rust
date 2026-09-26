@@ -102,6 +102,7 @@ pub fn exit(code: i32) -> ! {
             moto_rt::process::exit(code)
         }
         target_os = "toyos" => {
+            crate::sys::stdio::finish();
             toyos_abi::syscall::exit(code)
         }
         all(target_vendor = "fortanix", target_env = "sgx") => {
