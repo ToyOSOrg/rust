@@ -217,7 +217,7 @@ impl TcpStream {
 
     /// Whether the receive pipe's end was the peer's FIN or not. netd ends
     /// the send pipe too, and first, when the connection did not end in
-    /// order — a reset, a timeout, or netd itself — so a send pipe with no
+    /// order — a reset, a timeout — so a send pipe with no
     /// reader behind a receive pipe at its end is a reset.
     fn ended(&self) -> io::Result<()> {
         match syscall::write_nonblock(self.raw_handle(), &[]) {
