@@ -374,7 +374,7 @@ fn absolute(path: &Path) -> io::Result<String> {
         String::from(text)
     } else {
         let cwd = crate::env::current_dir()?;
-        let cwd = cwd.to_str().unwrap_or("/");
+        let cwd = cwd.to_str().expect("getcwd answers UTF-8");
         format!("{cwd}/{text}")
     };
     let mut parts: Vec<&str> = Vec::new();
@@ -390,8 +390,7 @@ fn absolute(path: &Path) -> io::Result<String> {
     Ok(format!("/{}", parts.join("/")))
 }
 
-/// The capability named `fs:<prefix>`, connecting once and remembering the
-/// answer either way.
+/// The capability named `fs:<prefix>`, remembering the answer either way.
 ///
 /// The connect waits for the server's hello, so it is made outside the lock: a
 /// server that has not answered holds up only the threads that asked it, and
