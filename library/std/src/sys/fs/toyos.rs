@@ -1016,32 +1016,23 @@ pub fn set_times_nofollow(_p: &Path, _times: FileTimes) -> io::Result<()> {
     Ok(())
 }
 
-/// The whole of the file at `path` in a shared memory object of this
-/// process's own, and how many of its bytes are the file: what a spawn or a
-/// `dlopen` of a program the kernel cannot open itself hands the kernel.
-pub fn read_image(path: &Path) -> io::Result<(toyos::shm::SharedMemory, u64)> {
+/// The whole of the file at `path` as a program image: what a spawn of a
+/// program the kernel cannot open itself hands the kernel.
+pub fn read_image(path: &Path) -> io::Result<toyos::process::Image> {
     let mut opts = OpenOptions::new();
     opts.read(true);
     let file = File::open(path, &opts)?;
     let len = file.file_attr()?.size;
-    let len = usize::try_from(len)
-        .map_err(|_| io::const_error!(io::ErrorKind::FileTooLarge, "the program is larger than memory"))?;
-    if len == 0 {
-        return Err(io::const_error!(io::ErrorKind::InvalidData, "the program is an empty file"));
-    }
-    let image = toyos::shm::SharedMemory::create(len).map_err(to_io_error)?;
-    // SAFETY: the region is `len` bytes and more, mapped here, and this
-    // process's alone until its handle is handed to the kernel after this
-    // returns; the slice ends with this function.
-    let bytes = unsafe { crate::slice::from_raw_parts_mut(image.as_ptr(), len) };
-    let mut done = 0;
-    while done < len {
-        match file.read(&mut bytes[done..])? {
-            0 => return Err(io::const_error!(io::ErrorKind::UnexpectedEof, "the program shrank while it was read")),
-            n => done += n,
+    toyos::process::Image::read(len, |buf| file.read(buf)).map_err(|refused| match refused {
+        toyos::process::ImageRefused::Empty => {
+            io::const_error!(io::ErrorKind::InvalidData, "the program is an empty file")
         }
-    }
-    Ok((image, len as u64))
+        toyos::process::ImageRefused::Memory(e) => to_io_error(e),
+        toyos::process::ImageRefused::Shrank => {
+            io::const_error!(io::ErrorKind::UnexpectedEof, "the program shrank while it was read")
+        }
+        toyos::process::ImageRefused::Read(e) => e,
+    })
 }
 
 /// Make the working directory `p`, which a file server judges when it serves

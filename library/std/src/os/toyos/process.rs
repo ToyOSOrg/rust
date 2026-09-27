@@ -43,6 +43,16 @@ pub trait CommandExt {
     /// nowhere else the manifest row can come from.
     #[stable(feature = "toyos_ext", since = "1.0.0")]
     fn provide(&mut self, name: &str, connector: u32) -> &mut Self;
+
+    /// Make now, on this thread, every file read this command's spawn needs:
+    /// find the program, judge the working directory, and read a program on a
+    /// file server into memory. The spawn then calls no file server for them —
+    /// for a caller whose spawning thread may not wait on one, as
+    /// `/system/bin/init`'s loop may not wait on the file servers it starts
+    /// again. A later [`current_dir`](crate::process::Command::current_dir)
+    /// undoes it.
+    #[stable(feature = "toyos_ext", since = "1.0.0")]
+    fn prepare(&mut self) -> crate::io::Result<&mut Self>;
 }
 
 #[stable(feature = "toyos_ext", since = "1.0.0")]
@@ -60,6 +70,11 @@ impl CommandExt for crate::process::Command {
     fn provide(&mut self, name: &str, connector: u32) -> &mut Self {
         self.as_inner_mut().provide(name, connector);
         self
+    }
+
+    fn prepare(&mut self) -> crate::io::Result<&mut Self> {
+        self.as_inner_mut().prepare()?;
+        Ok(self)
     }
 }
 

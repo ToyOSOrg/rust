@@ -25,6 +25,15 @@ pub struct Command {
     extra_slots: Vec<[u32; 2]>,
     endowments: Vec<(String, u32)>,
     provided: Vec<(String, u32)>,
+    prepared: Option<Prepared>,
+}
+
+/// The file reads a spawn needs, made ahead of it ([`Command::prepare`]).
+struct Prepared {
+    program: OsString,
+    cwd: String,
+    /// The program, when it is on a file server.
+    image: Option<toyos::process::Image>,
 }
 
 /// Where a spawn goes once the launcher has been asked, or could not be.
@@ -72,6 +81,7 @@ impl Command {
             extra_slots: Vec::new(),
             endowments: Vec::new(),
             provided: Vec::new(),
+            prepared: None,
         }
     }
 
@@ -85,6 +95,20 @@ impl Command {
 
     pub fn cwd(&mut self, dir: &OsStr) {
         self.cwd = Some(dir.to_owned());
+        self.prepared = None;
+    }
+
+    /// Find the program, judge the working directory and read a program on a
+    /// file server, so that [`Self::spawn`] calls no file server for them.
+    pub fn prepare(&mut self) -> io::Result<()> {
+        let program = self.resolve_program()?;
+        let cwd = self.child_cwd()?;
+        let image = match crate::sys::fs::is_served(Path::new(&program)) {
+            true => Some(crate::sys::fs::read_image(Path::new(&program))?),
+            false => None,
+        };
+        self.prepared = Some(Prepared { program, cwd, image });
+        Ok(())
     }
 
     pub fn stdin(&mut self, stdin: Stdio) {
@@ -205,8 +229,11 @@ impl Command {
         default: Stdio,
         _needs_stdin: bool,
     ) -> io::Result<(Process, StdioPipes)> {
-        let resolved = self.resolve_program()?;
-        let cwd = self.child_cwd()?;
+        let prepared = self.prepared.take();
+        let (resolved, cwd, prepared_image) = match prepared {
+            Some(Prepared { program, cwd, image }) => (program, cwd, image),
+            None => (self.resolve_program()?, self.child_cwd()?, None),
+        };
         let mut argv_buf = Vec::new();
         argv_buf.extend_from_slice(resolved.as_encoded_bytes());
         for arg in &self.args[1..] {
@@ -291,15 +318,17 @@ impl Command {
         // A program on a file server is read here, into a memory object of
         // this process's own that the kernel pages the child from: the kernel
         // opens only what it serves itself.
-        let image = if crate::sys::fs::is_served(Path::new(&resolved)) {
-            Some(crate::sys::fs::read_image(Path::new(&resolved)).map_err(|e| {
-                if let Some(handle) = inherited {
-                    toyos_abi::syscall::close(handle);
-                }
-                e
-            })?)
-        } else {
-            None
+        let image = match prepared_image {
+            Some(image) => Some(image),
+            None if crate::sys::fs::is_served(Path::new(&resolved)) => {
+                Some(crate::sys::fs::read_image(Path::new(&resolved)).map_err(|e| {
+                    if let Some(handle) = inherited {
+                        toyos_abi::syscall::close(handle);
+                    }
+                    e
+                })?)
+            }
+            None => None,
         };
 
         let spawn_args = toyos_abi::syscall::SpawnArgs {
@@ -315,8 +344,8 @@ impl Command {
             labels_len: labels.len() as u64,
             cwd_ptr: cwd.as_ptr().expose_provenance() as u64,
             cwd_len: cwd.len() as u64,
-            image: image.as_ref().map_or(0, |(object, _)| toyos::AsHandle::as_handle(object).0 as u64),
-            image_len: image.as_ref().map_or(0, |(_, len)| *len),
+            image: image.as_ref().map_or(0, |image| image.spawn_words().0),
+            image_len: image.as_ref().map_or(0, |image| image.spawn_words().1),
         };
         // SAFETY: spawn_args contains valid pointers to stack-local buffers that outlive the call.
         let spawned = unsafe { toyos_abi::syscall::spawn(&spawn_args) };
