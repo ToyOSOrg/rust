@@ -392,9 +392,12 @@ fn absolute(path: &Path) -> io::Result<String> {
 
 /// The capability named `fs:<prefix>`, connecting once and remembering the
 /// answer either way.
+///
+/// The connect waits for the server's hello, so it is made outside the lock: a
+/// server that has not answered holds up only the threads that asked it, and
+/// of two threads that connect at once the first answer kept is the one used.
 fn capability(prefix: &str) -> io::Result<Option<Arc<Capability>>> {
-    let mut known = CAPABILITIES.lock().unwrap();
-    if let Some(found) = known.get(prefix) {
+    if let Some(found) = CAPABILITIES.lock().unwrap().get(prefix) {
         return Ok(found.clone());
     }
     let Some(names) = toyos::endow::namespace() else {
@@ -406,8 +409,7 @@ fn capability(prefix: &str) -> io::Result<Option<Arc<Capability>>> {
         Err(SyscallError::NotFound) | Err(SyscallError::InvalidArgument) => None,
         Err(e) => return Err(served_error(e)),
     };
-    known.insert(String::from(prefix), found.clone());
-    Ok(found)
+    Ok(CAPABILITIES.lock().unwrap().entry(String::from(prefix)).or_insert(found).clone())
 }
 
 /// Which server `abs` is on, and the path there.
