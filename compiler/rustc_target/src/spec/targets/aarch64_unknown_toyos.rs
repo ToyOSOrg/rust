@@ -1,9 +1,7 @@
-use crate::spec::{Arch, Cc, LinkerFlavor, Lld, StackProbeType, Target, TargetMetadata, base};
+use crate::spec::{Arch, StackProbeType, Target, TargetMetadata, base};
 
 pub(crate) fn target() -> Target {
     let mut opts = base::toyos::opts();
-    opts.linker = Some("rust-lld".into());
-    opts.linker_flavor = LinkerFlavor::Gnu(Cc::No, Lld::Yes);
     opts.features = "+v8a".into();
     opts.max_atomic_width = Some(128);
     opts.stack_probes = StackProbeType::Inline;

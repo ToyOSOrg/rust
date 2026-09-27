@@ -3,10 +3,16 @@ use crate::spec::{
 };
 
 pub(crate) fn opts() -> TargetOptions {
+    // ToyOS has no symbol interposition: a shared object binds its own
+    // definitions when it is linked.
+    let pre_link_args =
+        TargetOptions::link_args(LinkerFlavor::Gnu(Cc::No, Lld::No), &["-Bsymbolic"]);
+
     TargetOptions {
         os: Os::ToyOs,
-        linker: Some("toyos-ld".into()),
-        linker_flavor: LinkerFlavor::Gnu(Cc::No, Lld::No),
+        linker: Some("rust-lld".into()),
+        linker_flavor: LinkerFlavor::Gnu(Cc::No, Lld::Yes),
+        pre_link_args,
         stack_probes: StackProbeType::Inline,
         relocation_model: RelocModel::Pic,
         position_independent_executables: true,
