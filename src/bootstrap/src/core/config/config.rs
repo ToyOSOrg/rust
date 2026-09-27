@@ -2593,9 +2593,13 @@ pub(crate) fn update_submodule<'a>(
 
     let submodule_git = || helpers::git(Some(&absolute_path));
 
-    // Determine commit checked out in submodule.
-    let checked_out_hash =
-        submodule_git().args(["rev-parse", "HEAD"]).run_capture_stdout(dwn_ctx.exec_ctx).stdout();
+    // Determine commit checked out in submodule. An empty directory has none, and
+    // git asked there answers, cached, for the enclosing repository.
+    let checked_out_hash = if helpers::dir_is_empty(&absolute_path) {
+        String::new()
+    } else {
+        submodule_git().args(["rev-parse", "HEAD"]).run_capture_stdout(dwn_ctx.exec_ctx).stdout()
+    };
     let checked_out_hash = checked_out_hash.trim_end();
     // Determine commit that the submodule *should* have.
     let recorded = helpers::git(Some(dwn_ctx.src))

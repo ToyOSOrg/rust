@@ -172,12 +172,14 @@ pub fn prebuilt_llvm_config(
 
     static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
     let llvm_src = builder.config.src.join("src/llvm-project");
-    let hash = || generate_smart_stamp_hash(builder, &llvm_src, &in_tree_llvm_sha(builder));
-    // Memoized only once the checkout exists, or the hash of none would stand.
-    let smart_stamp_hash = if llvm_src.join(".git").exists() {
-        STAMP_HASH_MEMO.get_or_init(hash).clone()
+    // A checkout not made yet has no hash, and git asked in its empty directory
+    // answers, cached, for the enclosing repository.
+    let smart_stamp_hash = if fs::read_dir(&llvm_src).map_or(true, |mut d| d.next().is_none()) {
+        String::new()
     } else {
-        hash()
+        STAMP_HASH_MEMO
+            .get_or_init(|| generate_smart_stamp_hash(builder, &llvm_src, &in_tree_llvm_sha(builder)))
+            .clone()
     };
 
     let stamp = BuildStamp::new(&out_dir).with_prefix("llvm").add_stamp(smart_stamp_hash);
