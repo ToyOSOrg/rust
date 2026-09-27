@@ -225,7 +225,6 @@ pub struct Build {
     miri_info: GitInfo,
     rustfmt_info: GitInfo,
     enzyme_info: GitInfo,
-    in_tree_llvm_info: GitInfo,
     in_tree_gcc_info: GitInfo,
     local_rebuild: bool,
     fail_fast: bool,
@@ -476,7 +475,6 @@ impl Build {
         let miri_info = config.miri_info.clone();
         let rustfmt_info = config.rustfmt_info.clone();
         let enzyme_info = config.enzyme_info.clone();
-        let in_tree_llvm_info = config.in_tree_llvm_info.clone();
         let in_tree_gcc_info = config.in_tree_gcc_info.clone();
 
         let initial_target_libdir = command(&config.initial_rustc)
@@ -566,7 +564,6 @@ impl Build {
             miri_info,
             rustfmt_info,
             enzyme_info,
-            in_tree_llvm_info,
             in_tree_gcc_info,
             cc: HashMap::new(),
             cxx: HashMap::new(),

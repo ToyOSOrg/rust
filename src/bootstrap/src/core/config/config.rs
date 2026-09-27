@@ -301,7 +301,6 @@ pub struct Config {
     pub miri_info: channel::GitInfo,
     pub rustfmt_info: channel::GitInfo,
     pub enzyme_info: channel::GitInfo,
-    pub in_tree_llvm_info: channel::GitInfo,
     pub in_tree_gcc_info: channel::GitInfo,
 
     // These are either the stage0 downloaded binaries or the locally installed ones.
@@ -1362,7 +1361,6 @@ NOTE: Please add `--stage 2` to your command line, or if you're sure you want to
         let cargo_info = git_info(&exec_ctx, omit_git_hash, &src.join("src/tools/cargo"));
         let clippy_info = git_info(&exec_ctx, omit_git_hash, &src.join("src/tools/clippy"));
         let in_tree_gcc_info = git_info(&exec_ctx, false, &src.join("src/gcc"));
-        let in_tree_llvm_info = git_info(&exec_ctx, false, &src.join("src/llvm-project"));
         let enzyme_info = git_info(&exec_ctx, omit_git_hash, &src.join("src/tools/enzyme"));
         let miri_info = git_info(&exec_ctx, omit_git_hash, &src.join("src/tools/miri"));
         let rust_analyzer_info =
@@ -1454,7 +1452,6 @@ NOTE: Please add `--stage 2` to your command line, or if you're sure you want to
             host_target,
             hosts,
             in_tree_gcc_info,
-            in_tree_llvm_info,
             include_default_paths: flags_include_default_paths,
             incremental: flags_incremental || rust_incremental == Some(true),
             initial_cargo,
