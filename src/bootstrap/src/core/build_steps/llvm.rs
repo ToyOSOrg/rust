@@ -171,13 +171,14 @@ pub fn prebuilt_llvm_config(
     let res = LlvmResult { host_llvm_config: build_llvm_config, llvm_cmake_dir };
 
     static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
-    let smart_stamp_hash = STAMP_HASH_MEMO.get_or_init(|| {
-        generate_smart_stamp_hash(
-            builder,
-            &builder.config.src.join("src/llvm-project"),
-            &in_tree_llvm_sha(builder),
-        )
-    });
+    let llvm_src = builder.config.src.join("src/llvm-project");
+    let hash = || generate_smart_stamp_hash(builder, &llvm_src, &in_tree_llvm_sha(builder));
+    // Memoized only once the checkout exists, or the hash of none would stand.
+    let smart_stamp_hash = if llvm_src.join(".git").exists() {
+        STAMP_HASH_MEMO.get_or_init(hash).clone()
+    } else {
+        hash()
+    };
 
     let stamp = BuildStamp::new(&out_dir).with_prefix("llvm").add_stamp(smart_stamp_hash);
 
