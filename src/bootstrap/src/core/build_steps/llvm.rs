@@ -11,7 +11,6 @@
 use std::env::consts::EXE_EXTENSION;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::{env, fs};
 
 use build_helper::git::PathFreshness;
@@ -1013,14 +1012,11 @@ impl CommandLineStep for OmpOffload {
         files.push(out_dir.join("lib").join("libomptarget").with_extension(lib_ext));
 
         // Offload/OpenMP are just subfolders of LLVM, so we can use the LLVM sha.
-        static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
-        let smart_stamp_hash = STAMP_HASH_MEMO.get_or_init(|| {
-            generate_smart_stamp_hash(
-                builder,
-                &builder.config.src.join("src/llvm-project/offload"),
-                &in_tree_llvm_sha(builder),
-            )
-        });
+        let smart_stamp_hash = generate_smart_stamp_hash(
+            builder,
+            &builder.config.src.join("src/llvm-project/offload"),
+            &in_tree_llvm_sha(builder),
+        );
         let stamp = BuildStamp::new(&out_dir).with_prefix("offload").add_stamp(smart_stamp_hash);
 
         trace!("checking build stamp to see if we need to rebuild offload/openmp artifacts");
@@ -1188,14 +1184,11 @@ impl CommandLineStep for Enzyme {
         let enzyme_hash_input =
             in_tree_llvm_sha(builder) + builder.enzyme_info.sha().unwrap_or_default();
 
-        static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
-        let smart_stamp_hash = STAMP_HASH_MEMO.get_or_init(|| {
-            generate_smart_stamp_hash(
-                builder,
-                &builder.config.src.join("src/tools/enzyme"),
-                &enzyme_hash_input,
-            )
-        });
+        let smart_stamp_hash = generate_smart_stamp_hash(
+            builder,
+            &builder.config.src.join("src/tools/enzyme"),
+            &enzyme_hash_input,
+        );
 
         let out_dir = builder.enzyme_out(target);
         let stamp = BuildStamp::new(&out_dir).with_prefix("enzyme").add_stamp(smart_stamp_hash);
@@ -1446,14 +1439,11 @@ impl CommandLineStep for Sanitizers {
         let LlvmResult { host_llvm_config, .. } =
             builder.ensure(Llvm { target: builder.config.host_target });
 
-        static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
-        let smart_stamp_hash = STAMP_HASH_MEMO.get_or_init(|| {
-            generate_smart_stamp_hash(
-                builder,
-                &builder.config.src.join("src/llvm-project/compiler-rt"),
-                &in_tree_llvm_sha(builder),
-            )
-        });
+        let smart_stamp_hash = generate_smart_stamp_hash(
+            builder,
+            &builder.config.src.join("src/llvm-project/compiler-rt"),
+            &in_tree_llvm_sha(builder),
+        );
 
         let stamp = BuildStamp::new(&out_dir).with_prefix("sanitizers").add_stamp(smart_stamp_hash);
 
