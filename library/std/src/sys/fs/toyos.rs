@@ -9,10 +9,7 @@
 //! holds is the kernel's.
 //!
 //! A file server that restarts is survived: its capability is connected
-//! again, and a file open on it is opened again by its path and offset the
-//! next time it is used, when the server answers the identity the handle last
-//! saw. Any other file at the path, or this one changed by a write the restart
-//! lost, answers `StaleNetworkFileHandle`.
+//! again.
 
 use toyos_abi::RawHandle;
 use toyos_abi::syscall::{self, OpenFlags, SyscallError};
@@ -24,7 +21,7 @@ use crate::fs::TryLockError;
 use crate::hash::Hash;
 use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut, SeekFrom};
 use crate::path::{Path, PathBuf};
-use crate::sync::{Arc, Mutex};
+use crate::sync::{Arc, Condvar, Mutex, MutexGuard};
 pub use crate::sys::fs::common::Dir;
 use crate::sys::time::SystemTime;
 use crate::sys::to_io_error;
@@ -45,10 +42,7 @@ enum Inner {
 /// A file open on a file server.
 struct Served {
     dir: Arc<Capability>,
-    /// Relative to the capability, as the server resolved it last.
     rel: String,
-    /// What it is opened again with after a restart: never create or truncate.
-    reopen: u64,
     append: bool,
     state: Mutex<Position>,
 }
@@ -57,15 +51,70 @@ struct Position {
     fid: u64,
     generation: u64,
     offset: u64,
-    /// The file as this handle last saw it (`toyos::fs::Stat::ident`): what a
-    /// re-open after a restart must answer for the file to still be this one.
-    ident: u64,
 }
 
 /// One directory capability this process holds, connected.
 struct Capability {
     prefix: String,
     dir: Mutex<toyos::fs::Dir>,
+    /// Hands `dir` over in ticket order: std's mutex lets the thread that let
+    /// go barge ahead of the one it woke.
+    turns: Mutex<Turns>,
+    served: Condvar,
+}
+
+struct Turns {
+    next: u64,
+    serving: u64,
+}
+
+/// A directory's connection, held in turn.
+struct Held<'a> {
+    // Dropped before `_turn`, so the next ticket finds `dir` free.
+    dir: MutexGuard<'a, toyos::fs::Dir>,
+    _turn: Turn<'a>,
+}
+
+struct Turn<'a>(&'a Capability);
+
+impl Capability {
+    fn new(prefix: &str, dir: toyos::fs::Dir) -> Self {
+        Self {
+            prefix: String::from(prefix),
+            dir: Mutex::new(dir),
+            turns: Mutex::new(Turns { next: 0, serving: 0 }),
+            served: Condvar::new(),
+        }
+    }
+
+    fn lock(&self) -> Held<'_> {
+        let mut turns = self.turns.lock().unwrap();
+        let ticket = turns.next;
+        turns.next += 1;
+        drop(self.served.wait_while(turns, |t| t.serving != ticket).unwrap());
+        let turn = Turn(self);
+        Held { dir: self.dir.lock().unwrap(), _turn: turn }
+    }
+}
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        self.0.turns.lock().unwrap().serving += 1;
+        self.0.served.notify_all();
+    }
+}
+
+impl crate::ops::Deref for Held<'_> {
+    type Target = toyos::fs::Dir;
+    fn deref(&self) -> &toyos::fs::Dir {
+        &self.dir
+    }
+}
+
+impl crate::ops::DerefMut for Held<'_> {
+    fn deref_mut(&mut self) -> &mut toyos::fs::Dir {
+        &mut self.dir
+    }
 }
 
 #[derive(Clone)]
@@ -310,7 +359,7 @@ fn served_error(e: SyscallError) -> io::Error {
     match e {
         SyscallError::Gone => io::const_error!(
             io::ErrorKind::StaleNetworkFileHandle,
-            "the file server is gone, or restarted and this file is no longer at its path",
+            "the file server is gone, or restarted since this file was opened",
         ),
         e => to_io_error(e),
     }
@@ -353,7 +402,7 @@ fn capability(prefix: &str) -> io::Result<Option<Arc<Capability>>> {
     };
     let name = format!("{}{prefix}", toyos::fs::CAPABILITY_PREFIX);
     let found = match toyos::fs::Dir::connect(names, &name) {
-        Ok(dir) => Some(Arc::new(Capability { prefix: String::from(prefix), dir: Mutex::new(dir) })),
+        Ok(dir) => Some(Arc::new(Capability::new(prefix, dir))),
         Err(SyscallError::NotFound) | Err(SyscallError::InvalidArgument) => None,
         Err(e) => return Err(served_error(e)),
     };
@@ -386,7 +435,7 @@ fn on_path<T>(
             Route::Kernel(abs) => return kernel(&abs),
             Route::Served(cap, rel) => (cap, rel),
         };
-        let mut dir = cap.dir.lock().unwrap();
+        let mut dir = cap.lock();
         match served(&cap, &mut dir, &rel) {
             Ok(answer) => return Ok(answer),
             Err(toyos::fs::Refused::Error(e)) => return Err(served_error(e)),
@@ -409,50 +458,19 @@ pub fn is_served(path: &Path) -> bool {
 }
 
 impl Served {
-    /// Run `op` on this file's id, opening it again first if its server has
-    /// restarted since, and once more if the server ends under the call. An
-    /// append is not asked again: whether the first one landed is unknown.
     fn with<T>(
         &self,
-        mut op: impl FnMut(&mut toyos::fs::Dir, &mut Position) -> Result<T, SyscallError>,
+        op: impl FnOnce(&mut toyos::fs::Dir, &mut Position) -> Result<T, SyscallError>,
     ) -> io::Result<T> {
-        let mut dir = self.dir.dir.lock().unwrap();
+        let mut dir = self.dir.lock();
         let mut pos = self.state.lock().unwrap();
-        for attempt in 0..2 {
-            if pos.generation != dir.generation() {
-                match dir.open(&self.rel, self.reopen) {
-                    Ok(opened) if opened.stat.ident != 0 && opened.stat.ident == pos.ident => {
-                        pos.fid = opened.fid;
-                        pos.generation = opened.generation;
-                    }
-                    // Another file at the path, this one changed by a write
-                    // the restart lost, or one the volume cannot tell from
-                    // another: writing on would write into what it is not.
-                    Ok(opened) => {
-                        dir.close(opened.fid, opened.generation);
-                        return Err(served_error(SyscallError::Gone));
-                    }
-                    // Not at its path any more, or behind a link now.
-                    Err(_) => return Err(served_error(SyscallError::Gone)),
-                }
-            }
-            match op(&mut dir, &mut pos) {
-                // Only a connection that ended: a server's own `Gone` is this
-                // file's end, and reconnecting would take every other file of
-                // this process with it.
-                Err(SyscallError::Gone) if attempt == 0 && !self.append && !dir.connected() => {
-                    dir.reconnect().map_err(served_error)?;
-                }
-                answer => return answer.map_err(served_error),
-            }
-        }
-        Err(served_error(SyscallError::Gone))
+        op(&mut dir, &mut pos).map_err(served_error)
     }
 }
 
 impl Drop for Served {
     fn drop(&mut self) {
-        let mut dir = self.dir.dir.lock().unwrap();
+        let mut dir = self.dir.lock();
         let pos = self.state.lock().unwrap();
         dir.close(pos.fid, pos.generation);
     }
@@ -502,17 +520,14 @@ impl File {
             |cap, dir, rel| {
                 let flags = opts.served_flags();
                 let opened = dir.open(rel, flags)?;
-                let reopen = flags & (toyos::fs::O_READ | toyos::fs::O_WRITE | toyos::fs::O_APPEND);
                 Ok(File(Inner::Served(Arc::new(Served {
                     dir: Arc::clone(cap),
                     rel: String::from(rel),
-                    reopen,
                     append: opts.append,
                     state: Mutex::new(Position {
                         fid: opened.fid,
                         generation: opened.generation,
                         offset: 0,
-                        ident: opened.stat.ident,
                     }),
                 }))))
             },
@@ -529,13 +544,7 @@ impl File {
                     mtime: stat.mtime,
                 })
             }
-            Inner::Served(s) => s
-                .with(|dir, pos| {
-                    let stat = dir.fstat(pos.fid, pos.generation)?;
-                    pos.ident = stat.ident;
-                    Ok(stat)
-                })
-                .map(FileAttr::of),
+            Inner::Served(s) => s.with(|dir, pos| dir.fstat(pos.fid, pos.generation)).map(FileAttr::of),
         }
     }
 
@@ -569,10 +578,7 @@ impl File {
     pub fn truncate(&self, size: u64) -> io::Result<()> {
         match &self.0 {
             Inner::Kernel(h) => syscall::ftruncate(*h, size).map_err(to_io_error),
-            Inner::Served(s) => s.with(|dir, pos| {
-                pos.ident = dir.truncate(pos.fid, pos.generation, size)?;
-                Ok(())
-            }),
+            Inner::Served(s) => s.with(|dir, pos| dir.truncate(pos.fid, pos.generation, size)),
         }
     }
 
@@ -621,7 +627,6 @@ impl File {
             Inner::Served(s) => s.with(|dir, pos| {
                 let written = dir.write(pos.fid, pos.generation, pos.offset, buf)?;
                 pos.offset = written.offset;
-                pos.ident = written.ident;
                 Ok(written.len)
             }),
         }
@@ -846,7 +851,7 @@ pub fn rename(old: &Path, new: &Path) -> io::Result<()> {
             syscall::rename(a.as_bytes(), b.as_bytes()).map_err(to_io_error)
         }
         (Route::Served(ca, a), Route::Served(cb, b)) if Arc::ptr_eq(&ca, &cb) => {
-            ca.dir.lock().unwrap().rename(&a, &b).map_err(|e| match e {
+            ca.lock().rename(&a, &b).map_err(|e| match e {
                 toyos::fs::Refused::Error(e) => served_error(e),
                 toyos::fs::Refused::Link(_) => io::const_error!(
                     io::ErrorKind::CrossesDevices,
