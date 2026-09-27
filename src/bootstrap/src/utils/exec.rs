@@ -613,6 +613,12 @@ impl ExecutionContext {
         &self.profiler
     }
 
+    /// Forgets every cached command output, for when a command has changed what
+    /// the cached ones would now answer.
+    pub fn forget_cached_commands(&self) {
+        self.command_cache.cache.lock().unwrap().clear();
+    }
+
     pub fn get_dry_run(&self) -> &DryRun {
         &self.dry_run
     }

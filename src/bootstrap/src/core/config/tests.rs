@@ -11,13 +11,16 @@ use clap::CommandFactory;
 use super::flags::Flags;
 use super::toml::change_id::ChangeIdWrapper;
 use super::toml::rust::parse_codegen_backends;
-use super::{Config, DebuggerPath, RUSTC_IF_UNCHANGED_ALLOWED_PATHS};
+use super::{Config, DebuggerPath, RUSTC_IF_UNCHANGED_ALLOWED_PATHS, update_submodule};
 use crate::ChangeId;
 use crate::core::build_steps::clippy::{LintConfig, get_clippy_rules_in_order};
 use crate::core::build_steps::llvm::LLVM_INVALIDATION_PATHS;
 use crate::core::config::{BootstrapOverrideLld, CompilerBuiltins, Target, TargetSelection};
+use crate::core::download::DownloadContext;
+use crate::utils::channel::GitInfo;
+use crate::utils::exec::ExecutionContext;
 use crate::utils::tests::TestCtx;
-use crate::utils::tests::git::git_test;
+use crate::utils::tests::git::{GitCtx, git_test};
 
 pub(crate) fn parse(config: &str) -> Config {
     TestCtx::new().config("check").with_default_toml_config(config).create_config()
@@ -904,5 +907,66 @@ fn test_local_changes_subtree_that_used_bors() {
             ctx.check_modifications(&["nonexistent"], CiEnv::None),
             PathFreshness::LastModifiedUpstream { upstream: upstream_2 }
         );
+    });
+}
+
+/// `ctx` with a submodule `sub` whose commit `ctx` records is the second of two, returned
+/// with the first.
+fn submodule_with_two_commits(ctx: &GitCtx) -> (String, String) {
+    ctx.run_git(&["init", "-q", "sub"]);
+    ctx.run_git(&["-C", "sub", "config", "user.name", "Tester"]);
+    ctx.run_git(&["-C", "sub", "config", "user.email", "tester@rust-lang.org"]);
+    let commit = |data| {
+        ctx.write("sub/file", data);
+        ctx.run_git(&["-C", "sub", "add", "."]);
+        ctx.run_git(&["-C", "sub", "commit", "-qm", "commit message"]);
+        ctx.run_git(&["-C", "sub", "rev-parse", "HEAD"])
+    };
+    let first = commit("first");
+    let second = commit("second");
+    ctx.run_git(&["submodule", "add", "-q", "./sub", "sub"]);
+    ctx.run_git(&["submodule", "absorbgitdirs"]);
+    ctx.commit();
+    (first, second)
+}
+
+fn update_sub(ctx: &GitCtx, exec_ctx: &ExecutionContext) {
+    let dwn_ctx = DownloadContext {
+        path_modification_cache: Default::default(),
+        src: ctx.get_path(),
+        submodules: &Some(true),
+        host_target: TargetSelection::from_user("x86_64-unknown-linux-gnu"),
+        patch_binaries_for_nix: None,
+        exec_ctx,
+        stage0_metadata: &Default::default(),
+        llvm_assertions: false,
+        bootstrap_cache_path: &None,
+        ci_env: CiEnv::None,
+    };
+    update_submodule(&dwn_ctx, &GitInfo::new(false, ctx.get_path(), exec_ctx), "sub");
+}
+
+#[test]
+fn submodule_update_outdates_what_git_said_of_the_old_checkout() {
+    git_test(|ctx| {
+        let (first, second) = submodule_with_two_commits(ctx);
+        ctx.run_git(&["-C", "sub", "checkout", "-q", &first]);
+        let exec_ctx = ExecutionContext::new(0, false);
+        let sub = ctx.get_path().join("sub");
+        assert_eq!(GitInfo::new(false, &sub, &exec_ctx).sha(), Some(&*first));
+        update_sub(ctx, &exec_ctx);
+        assert_eq!(GitInfo::new(false, &sub, &exec_ctx).sha(), Some(&*second));
+    });
+}
+
+#[test]
+fn submodule_update_outdates_what_git_said_of_the_empty_directory() {
+    git_test(|ctx| {
+        let (_, second) = submodule_with_two_commits(ctx);
+        ctx.run_git(&["submodule", "deinit", "-q", "-f", "sub"]);
+        let exec_ctx = ExecutionContext::new(0, false);
+        update_sub(ctx, &exec_ctx);
+        let sub = ctx.get_path().join("sub");
+        assert_eq!(GitInfo::new(false, &sub, &exec_ctx).sha(), Some(&*second));
     });
 }

@@ -2673,6 +2673,9 @@ pub(crate) fn update_submodule<'a>(
     if has_local_modifications {
         submodule_git().allow_failure().args(["stash", "pop"]).run(dwn_ctx.exec_ctx);
     }
+
+    // Git's cached answers, `rev-parse HEAD` above among them, are about the old checkout.
+    dwn_ctx.exec_ctx.forget_cached_commands();
 }
 
 pub fn git_info(exec_ctx: &ExecutionContext, omit_git_hash: bool, dir: &Path) -> GitInfo {
