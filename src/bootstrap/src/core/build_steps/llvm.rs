@@ -1321,8 +1321,20 @@ impl CommandLineStep for Lld {
 
         let out_dir = builder.lld_out(target);
 
-        let lld_stamp = BuildStamp::new(&out_dir).with_prefix("lld");
-        if lld_stamp.path().exists() {
+        // LLD links against the LLVM ensured above, so it is keyed on the same
+        // source: a new LLVM commit, or a local change anywhere in the
+        // submodule, rebuilds it with LLVM rather than leaving an LLD of the
+        // LLVM before.
+        static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
+        let smart_stamp_hash = STAMP_HASH_MEMO.get_or_init(|| {
+            generate_smart_stamp_hash(
+                builder,
+                &builder.config.src.join("src/llvm-project"),
+                builder.in_tree_llvm_info.sha().unwrap_or_default(),
+            )
+        });
+        let lld_stamp = BuildStamp::new(&out_dir).with_prefix("lld").add_stamp(smart_stamp_hash);
+        if lld_stamp.is_up_to_date() {
             return out_dir;
         }
 
