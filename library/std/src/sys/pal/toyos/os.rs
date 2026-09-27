@@ -36,14 +36,7 @@ fn path_from_utf8(bytes: &[u8]) -> io::Result<PathBuf> {
 }
 
 pub fn chdir(p: &path::Path) -> io::Result<()> {
-    let bytes = p.as_os_str().as_encoded_bytes();
-    toyos_abi::syscall::chdir(bytes).map_err(|e| {
-        let kind = match e {
-            toyos_abi::syscall::SyscallError::NotFound => io::ErrorKind::NotFound,
-            _ => io::ErrorKind::Other,
-        };
-        io::Error::from(kind)
-    })
+    crate::sys::fs::chdir(p)
 }
 
 pub struct SplitPaths<'a> {

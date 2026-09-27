@@ -44,6 +44,7 @@ cfg_select! {
     target_os = "toyos" => {
         mod toyos;
         use toyos as imp;
+        pub use toyos::{chdir, is_served, read_image};
     }
     target_os = "vexos" => {
         mod vexos;

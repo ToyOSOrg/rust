@@ -187,6 +187,14 @@ impl Command {
             Some(dir) => crate::env::current_dir()?.join(dir),
             None => crate::env::current_dir()?,
         };
+        // The kernel judges a directory it serves itself; one on a file server
+        // is judged here, by that server, since the kernel cannot.
+        if crate::sys::fs::is_served(&dir) && !crate::fs::metadata(&dir)?.is_dir() {
+            return Err(io::const_error!(
+                io::ErrorKind::NotFound,
+                "working directory is not a directory",
+            ));
+        }
         dir.into_os_string().into_string().map_err(|_| {
             io::const_error!(io::ErrorKind::InvalidInput, "working directory is not UTF-8")
         })
@@ -212,14 +220,17 @@ impl Command {
 
         let mut slot_map: Vec<[u32; 2]> = Vec::new();
         let mut child_pipes: Vec<Pipe> = Vec::new();
+        // The pipes a file server appends a served file from; held until the
+        // child has its own copies.
+        let mut streams: Vec<toyos::Pipe> = Vec::new();
         let mut stdin_pipe: Option<Pipe> = None;
         let mut stdout_pipe: Option<Pipe> = None;
         let mut stderr_pipe: Option<Pipe> = None;
 
         // Resolve each stdio to a slot_map entry: [child_slot, parent_handle]
-        Self::setup_slot(&mut slot_map, &mut child_pipes, &mut stdin_pipe, stdin, 0, true)?;
-        Self::setup_slot(&mut slot_map, &mut child_pipes, &mut stdout_pipe, stdout, 1, false)?;
-        Self::setup_slot(&mut slot_map, &mut child_pipes, &mut stderr_pipe, stderr, 2, false)?;
+        Self::setup_slot(&mut slot_map, &mut child_pipes, &mut streams, &mut stdin_pipe, stdin, 0, true)?;
+        Self::setup_slot(&mut slot_map, &mut child_pipes, &mut streams, &mut stdout_pipe, stdout, 1, false)?;
+        Self::setup_slot(&mut slot_map, &mut child_pipes, &mut streams, &mut stderr_pipe, stderr, 2, false)?;
 
         // Add extra handle mappings (e.g., for jobserver pipes)
         slot_map.extend_from_slice(&self.extra_slots);
@@ -277,6 +288,18 @@ impl Command {
             }
         }
         let env_buf = env_blob(&self.direct_env(capture, home_from_init));
+        // A program on a file server is read here and handed over whole: the
+        // kernel opens only what it serves itself.
+        let image = if crate::sys::fs::is_served(Path::new(&resolved)) {
+            crate::sys::fs::read_image(Path::new(&resolved)).map_err(|e| {
+                if let Some(handle) = inherited {
+                    toyos_abi::syscall::close(handle);
+                }
+                e
+            })?
+        } else {
+            Vec::new()
+        };
 
         let spawn_args = toyos_abi::syscall::SpawnArgs {
             argv_ptr: argv_buf.as_ptr().expose_provenance() as u64,
@@ -291,12 +314,15 @@ impl Command {
             labels_len: labels.len() as u64,
             cwd_ptr: cwd.as_ptr().expose_provenance() as u64,
             cwd_len: cwd.len() as u64,
+            image_ptr: image.as_ptr().expose_provenance() as u64,
+            image_len: image.len() as u64,
         };
         // SAFETY: spawn_args contains valid pointers to stack-local buffers that outlive the call.
         let spawned = unsafe { toyos_abi::syscall::spawn(&spawn_args) };
 
         // Close child-side pipe ends in the parent
         drop(child_pipes);
+        drop(streams);
 
         let handle = spawned.map_err(|e| {
             // An endowment moves only on a spawn that happened, so the
@@ -446,6 +472,7 @@ impl Command {
     fn setup_slot(
         slot_map: &mut Vec<[u32; 2]>,
         child_pipes: &mut Vec<Pipe>,
+        streams: &mut Vec<toyos::Pipe>,
         parent_pipe: &mut Option<Pipe>,
         stdio: &Stdio,
         child_slot: u32,
@@ -469,7 +496,11 @@ impl Command {
                     *parent_pipe = Some(r);
                 }
             }
-            Stdio::InheritFile(file) => slot_map.push([child_slot, file.raw_fd() as u32]),
+            Stdio::InheritFile(file) => {
+                let (handle, stream) = file.as_child_stdio()?;
+                slot_map.push([child_slot, handle.0]);
+                streams.extend(stream);
+            }
             Stdio::InheritPipe(pipe) => slot_map.push([child_slot, pipe.raw_fd() as u32]),
             Stdio::ParentStdout => slot_map.push([child_slot, 1]),
             Stdio::ParentStderr => slot_map.push([child_slot, 2]),
