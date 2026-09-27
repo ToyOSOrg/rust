@@ -288,17 +288,18 @@ impl Command {
             }
         }
         let env_buf = env_blob(&self.direct_env(capture, home_from_init));
-        // A program on a file server is read here and handed over whole: the
-        // kernel opens only what it serves itself.
+        // A program on a file server is read here, into a memory object of
+        // this process's own that the kernel pages the child from: the kernel
+        // opens only what it serves itself.
         let image = if crate::sys::fs::is_served(Path::new(&resolved)) {
-            crate::sys::fs::read_image(Path::new(&resolved)).map_err(|e| {
+            Some(crate::sys::fs::read_image(Path::new(&resolved)).map_err(|e| {
                 if let Some(handle) = inherited {
                     toyos_abi::syscall::close(handle);
                 }
                 e
-            })?
+            })?)
         } else {
-            Vec::new()
+            None
         };
 
         let spawn_args = toyos_abi::syscall::SpawnArgs {
@@ -314,11 +315,14 @@ impl Command {
             labels_len: labels.len() as u64,
             cwd_ptr: cwd.as_ptr().expose_provenance() as u64,
             cwd_len: cwd.len() as u64,
-            image_ptr: image.as_ptr().expose_provenance() as u64,
-            image_len: image.len() as u64,
+            image: image.as_ref().map_or(0, |(object, _)| toyos::AsHandle::as_handle(object).0 as u64),
+            image_len: image.as_ref().map_or(0, |(_, len)| *len),
         };
         // SAFETY: spawn_args contains valid pointers to stack-local buffers that outlive the call.
         let spawned = unsafe { toyos_abi::syscall::spawn(&spawn_args) };
+        // The child keeps the object alive; this process's handle, and with it
+        // its own mapping, goes.
+        drop(image);
 
         // Close child-side pipe ends in the parent
         drop(child_pipes);

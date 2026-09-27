@@ -10,8 +10,9 @@
 //!
 //! A file server that restarts is survived: its capability is connected
 //! again, and a file open on it is opened again by its path and offset the
-//! next time it is used. A file whose path no longer names it answers
-//! `StaleNetworkFileHandle`.
+//! next time it is used, when the server answers the identity the handle last
+//! saw. Any other file at the path, or this one changed by a write the restart
+//! lost, answers `StaleNetworkFileHandle`.
 
 use toyos_abi::RawHandle;
 use toyos_abi::syscall::{self, OpenFlags, SyscallError};
@@ -56,6 +57,9 @@ struct Position {
     fid: u64,
     generation: u64,
     offset: u64,
+    /// The file as this handle last saw it (`toyos::fs::Stat::ident`): what a
+    /// re-open after a restart must answer for the file to still be this one.
+    ident: u64,
 }
 
 /// One directory capability this process holds, connected.
@@ -417,12 +421,18 @@ impl Served {
         for attempt in 0..2 {
             if pos.generation != dir.generation() {
                 match dir.open(&self.rel, self.reopen) {
-                    Ok(opened) => {
+                    Ok(opened) if opened.stat.ident != 0 && opened.stat.ident == pos.ident => {
                         pos.fid = opened.fid;
                         pos.generation = opened.generation;
                     }
-                    // Not at its path any more, or behind a link now: this
-                    // file is not the one it was.
+                    // Another file at the path, this one changed by a write
+                    // the restart lost, or one the volume cannot tell from
+                    // another: writing on would write into what it is not.
+                    Ok(opened) => {
+                        dir.close(opened.fid, opened.generation);
+                        return Err(served_error(SyscallError::Gone));
+                    }
+                    // Not at its path any more, or behind a link now.
                     Err(_) => return Err(served_error(SyscallError::Gone)),
                 }
             }
@@ -502,6 +512,7 @@ impl File {
                         fid: opened.fid,
                         generation: opened.generation,
                         offset: 0,
+                        ident: opened.stat.ident,
                     }),
                 }))))
             },
@@ -518,9 +529,13 @@ impl File {
                     mtime: stat.mtime,
                 })
             }
-            Inner::Served(s) => {
-                s.with(|dir, pos| dir.fstat(pos.fid, pos.generation)).map(FileAttr::of)
-            }
+            Inner::Served(s) => s
+                .with(|dir, pos| {
+                    let stat = dir.fstat(pos.fid, pos.generation)?;
+                    pos.ident = stat.ident;
+                    Ok(stat)
+                })
+                .map(FileAttr::of),
         }
     }
 
@@ -554,7 +569,10 @@ impl File {
     pub fn truncate(&self, size: u64) -> io::Result<()> {
         match &self.0 {
             Inner::Kernel(h) => syscall::ftruncate(*h, size).map_err(to_io_error),
-            Inner::Served(s) => s.with(|dir, pos| dir.truncate(pos.fid, pos.generation, size)),
+            Inner::Served(s) => s.with(|dir, pos| {
+                pos.ident = dir.truncate(pos.fid, pos.generation, size)?;
+                Ok(())
+            }),
         }
     }
 
@@ -601,9 +619,10 @@ impl File {
         match &self.0 {
             Inner::Kernel(h) => syscall::write(*h, buf).map_err(to_io_error),
             Inner::Served(s) => s.with(|dir, pos| {
-                let (n, after) = dir.write(pos.fid, pos.generation, pos.offset, buf)?;
-                pos.offset = after;
-                Ok(n)
+                let written = dir.write(pos.fid, pos.generation, pos.offset, buf)?;
+                pos.offset = written.offset;
+                pos.ident = written.ident;
+                Ok(written.len)
             }),
         }
     }
@@ -992,21 +1011,32 @@ pub fn set_times_nofollow(_p: &Path, _times: FileTimes) -> io::Result<()> {
     Ok(())
 }
 
-/// The whole of the file at `path`, for a spawn or a `dlopen` of a program
-/// the kernel cannot open itself.
-pub fn read_image(path: &Path) -> io::Result<Vec<u8>> {
+/// The whole of the file at `path` in a shared memory object of this
+/// process's own, and how many of its bytes are the file: what a spawn or a
+/// `dlopen` of a program the kernel cannot open itself hands the kernel.
+pub fn read_image(path: &Path) -> io::Result<(toyos::shm::SharedMemory, u64)> {
     let mut opts = OpenOptions::new();
     opts.read(true);
     let file = File::open(path, &opts)?;
-    let mut out = Vec::new();
-    let mut buf = vec![0u8; toyos::fs::WINDOW_BYTES];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            return Ok(out);
-        }
-        out.extend_from_slice(&buf[..n]);
+    let len = file.file_attr()?.size;
+    let len = usize::try_from(len)
+        .map_err(|_| io::const_error!(io::ErrorKind::FileTooLarge, "the program is larger than memory"))?;
+    if len == 0 {
+        return Err(io::const_error!(io::ErrorKind::InvalidData, "the program is an empty file"));
     }
+    let image = toyos::shm::SharedMemory::create(len).map_err(to_io_error)?;
+    // SAFETY: the region is `len` bytes and more, mapped here, and this
+    // process's alone until its handle is handed to the kernel after this
+    // returns; the slice ends with this function.
+    let bytes = unsafe { crate::slice::from_raw_parts_mut(image.as_ptr(), len) };
+    let mut done = 0;
+    while done < len {
+        match file.read(&mut bytes[done..])? {
+            0 => return Err(io::const_error!(io::ErrorKind::UnexpectedEof, "the program shrank while it was read")),
+            n => done += n,
+        }
+    }
+    Ok((image, len as u64))
 }
 
 /// Make the working directory `p`, which a file server judges when it serves
