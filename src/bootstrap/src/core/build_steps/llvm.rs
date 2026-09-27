@@ -1321,10 +1321,7 @@ impl CommandLineStep for Lld {
 
         let out_dir = builder.lld_out(target);
 
-        // LLD links against the LLVM ensured above, so it is keyed on the same
-        // source: a new LLVM commit, or a local change anywhere in the
-        // submodule, rebuilds it with LLVM rather than leaving an LLD of the
-        // LLVM before.
+        // Keyed on the LLVM source, so LLD is rebuilt with the LLVM it links.
         static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
         let smart_stamp_hash = STAMP_HASH_MEMO.get_or_init(|| {
             generate_smart_stamp_hash(
