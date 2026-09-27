@@ -1329,8 +1329,10 @@ impl CommandLineStep for Lld {
 
         let out_dir = builder.lld_out(target);
 
-        let lld_stamp = BuildStamp::new(&out_dir).with_prefix("lld");
-        if lld_stamp.path().exists() {
+        // LLVM's hash, so LLD is rebuilt with the LLVM it links.
+        let lld_stamp =
+            BuildStamp::new(&out_dir).with_prefix("lld").add_stamp(llvm_stamp_hash(builder));
+        if lld_stamp.is_up_to_date() {
             return out_dir;
         }
 
