@@ -1078,6 +1078,8 @@
 # Path to the `llvm-config` binary of the installation of a custom LLVM to link
 # against. Note that if this is specified we don't compile LLVM at all for this
 # target.
+# For the host, `rust.lld = true` then requires `llvm-has-rust-patches = true` and
+# takes LLD from beside `llvm-config` rather than building it.
 #llvm-config = <none> (path)
 
 # Override detection of whether this is a Rust-patched LLVM. This would be used

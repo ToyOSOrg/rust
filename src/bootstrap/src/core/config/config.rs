@@ -1179,7 +1179,25 @@ impl Config {
         }
 
         if lld_enabled && is_host_system_llvm {
-            panic!("Cannot enable LLD with `rust.lld = true` when using external llvm-config.");
+            // An external LLVM can provide LLD the way `download-ci-llvm` does, next to its
+            // `llvm-config`, and the `Lld` step then takes that one instead of building it. It is
+            // shipped as `rust-lld`, so it has to be Rust's own LLVM.
+            let Some(Target { llvm_config: Some(llvm_config), llvm_has_rust_patches, .. }) =
+                target_config.get(&host_target)
+            else {
+                unreachable!("a system LLVM for the host is one with an `llvm-config`")
+            };
+            if *llvm_has_rust_patches != Some(true) {
+                panic!(
+                    "Cannot enable LLD with `rust.lld = true` when using external llvm-config, unless it is Rust's LLVM: set `target.{host_target}.llvm-has-rust-patches = true` if it is."
+                );
+            }
+            if llvm::lld_beside_llvm_config(llvm_config, host_target).is_none() {
+                panic!(
+                    "Cannot enable LLD with `rust.lld = true` when using external llvm-config, unless LLD is installed beside it: there is no `lld` next to `{}`.",
+                    llvm_config.display()
+                );
+            }
         }
 
         let download_rustc = download_rustc_commit.is_some();
