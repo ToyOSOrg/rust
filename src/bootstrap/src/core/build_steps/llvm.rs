@@ -11,7 +11,6 @@
 use std::env::consts::EXE_EXTENSION;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::{env, fs};
 
 use build_helper::git::PathFreshness;
@@ -106,6 +105,23 @@ impl LdFlags {
     }
 }
 
+/// The commit `src/llvm-project` has checked out, read when it is asked for: a
+/// submodule update after the config is read can move it.
+fn in_tree_llvm_sha(builder: &Builder<'_>) -> String {
+    let info = builder.config.git_info(false, &builder.config.src.join("src/llvm-project"));
+    info.sha().unwrap_or_default().to_owned()
+}
+
+/// The hash LLVM's build stamp carries, from the `src/llvm-project` checkout as it is when
+/// asked. The git commands behind it are cached until a submodule update runs.
+fn llvm_stamp_hash(builder: &Builder<'_>) -> String {
+    generate_smart_stamp_hash(
+        builder,
+        &builder.config.src.join("src/llvm-project"),
+        &in_tree_llvm_sha(builder),
+    )
+}
+
 /// This returns whether we've already previously built LLVM.
 ///
 /// It's used to avoid busting caches during x.py check -- if we've already built
@@ -163,16 +179,7 @@ pub fn prebuilt_llvm_config(
     let llvm_cmake_dir = out_dir.join("lib/cmake/llvm");
     let res = LlvmResult { host_llvm_config: build_llvm_config, llvm_cmake_dir };
 
-    static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
-    let smart_stamp_hash = STAMP_HASH_MEMO.get_or_init(|| {
-        generate_smart_stamp_hash(
-            builder,
-            &builder.config.src.join("src/llvm-project"),
-            builder.in_tree_llvm_info.sha().unwrap_or_default(),
-        )
-    });
-
-    let stamp = BuildStamp::new(&out_dir).with_prefix("llvm").add_stamp(smart_stamp_hash);
+    let stamp = BuildStamp::new(&out_dir).with_prefix("llvm").add_stamp(llvm_stamp_hash(builder));
 
     if stamp.is_up_to_date() {
         if stamp.stamp().is_empty() {
@@ -1005,14 +1012,11 @@ impl CommandLineStep for OmpOffload {
         files.push(out_dir.join("lib").join("libomptarget").with_extension(lib_ext));
 
         // Offload/OpenMP are just subfolders of LLVM, so we can use the LLVM sha.
-        static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
-        let smart_stamp_hash = STAMP_HASH_MEMO.get_or_init(|| {
-            generate_smart_stamp_hash(
-                builder,
-                &builder.config.src.join("src/llvm-project/offload"),
-                builder.in_tree_llvm_info.sha().unwrap_or_default(),
-            )
-        });
+        let smart_stamp_hash = generate_smart_stamp_hash(
+            builder,
+            &builder.config.src.join("src/llvm-project/offload"),
+            &in_tree_llvm_sha(builder),
+        );
         let stamp = BuildStamp::new(&out_dir).with_prefix("offload").add_stamp(smart_stamp_hash);
 
         trace!("checking build stamp to see if we need to rebuild offload/openmp artifacts");
@@ -1177,17 +1181,14 @@ impl CommandLineStep for Enzyme {
         // Enzyme links against LLVM. If we update the LLVM submodule libLLVM might get a new
         // version number, in which case Enzyme will now fail to find LLVM. By including the LLVM
         // hash into the Enzyme hash we force a rebuild of Enzyme when updating LLVM.
-        let enzyme_hash_input = builder.in_tree_llvm_info.sha().unwrap_or_default().to_owned()
-            + builder.enzyme_info.sha().unwrap_or_default();
+        let enzyme_hash_input =
+            in_tree_llvm_sha(builder) + builder.enzyme_info.sha().unwrap_or_default();
 
-        static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
-        let smart_stamp_hash = STAMP_HASH_MEMO.get_or_init(|| {
-            generate_smart_stamp_hash(
-                builder,
-                &builder.config.src.join("src/tools/enzyme"),
-                &enzyme_hash_input,
-            )
-        });
+        let smart_stamp_hash = generate_smart_stamp_hash(
+            builder,
+            &builder.config.src.join("src/tools/enzyme"),
+            &enzyme_hash_input,
+        );
 
         let out_dir = builder.enzyme_out(target);
         let stamp = BuildStamp::new(&out_dir).with_prefix("enzyme").add_stamp(smart_stamp_hash);
@@ -1321,8 +1322,10 @@ impl CommandLineStep for Lld {
 
         let out_dir = builder.lld_out(target);
 
-        let lld_stamp = BuildStamp::new(&out_dir).with_prefix("lld");
-        if lld_stamp.path().exists() {
+        // LLVM's hash, so LLD is rebuilt with the LLVM it links.
+        let lld_stamp =
+            BuildStamp::new(&out_dir).with_prefix("lld").add_stamp(llvm_stamp_hash(builder));
+        if lld_stamp.is_up_to_date() {
             return out_dir;
         }
 
@@ -1436,14 +1439,11 @@ impl CommandLineStep for Sanitizers {
         let LlvmResult { host_llvm_config, .. } =
             builder.ensure(Llvm { target: builder.config.host_target });
 
-        static STAMP_HASH_MEMO: OnceLock<String> = OnceLock::new();
-        let smart_stamp_hash = STAMP_HASH_MEMO.get_or_init(|| {
-            generate_smart_stamp_hash(
-                builder,
-                &builder.config.src.join("src/llvm-project/compiler-rt"),
-                builder.in_tree_llvm_info.sha().unwrap_or_default(),
-            )
-        });
+        let smart_stamp_hash = generate_smart_stamp_hash(
+            builder,
+            &builder.config.src.join("src/llvm-project/compiler-rt"),
+            &in_tree_llvm_sha(builder),
+        );
 
         let stamp = BuildStamp::new(&out_dir).with_prefix("sanitizers").add_stamp(smart_stamp_hash);
 
