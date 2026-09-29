@@ -19,6 +19,7 @@ use crate::core::config::{BootstrapOverrideLld, CompilerBuiltins, Target, Target
 use crate::core::download::DownloadContext;
 use crate::utils::channel::GitInfo;
 use crate::utils::exec::ExecutionContext;
+use crate::utils::helpers::{exe, get_host_target};
 use crate::utils::tests::TestCtx;
 use crate::utils::tests::git::{GitCtx, git_test};
 
@@ -255,6 +256,54 @@ fn rust_lld() {
         parse("rust.bootstrap-override-lld = false").bootstrap_override_lld,
         BootstrapOverrideLld::None
     ));
+}
+
+/// Parses `rust.lld = true` with an external `llvm-config` for the host in `ctx`'s `llvm/bin`.
+fn lld_with_llvm_config(ctx: &TestCtx, has_rust_patches: bool) -> Config {
+    let host = get_host_target();
+    ctx.config("check")
+        .with_default_toml_config(&format!(
+            r#"
+            rust.lld = true
+            [target.{host}]
+            llvm-config = "{}/llvm/bin/llvm-config"
+            llvm-has-rust-patches = {has_rust_patches}
+            "#,
+            ctx.normalized_dir()
+        ))
+        .create_config()
+}
+
+/// Creates `ctx`'s `llvm/bin`, with an `lld` in it or not.
+fn llvm_bin(ctx: &TestCtx, with_lld: bool) {
+    let bin = ctx.dir().join("llvm/bin");
+    fs::create_dir_all(&bin).unwrap();
+    if with_lld {
+        File::create(bin.join(exe("lld", get_host_target()))).unwrap();
+    }
+}
+
+#[test]
+fn lld_beside_external_llvm_config() {
+    let ctx = TestCtx::new();
+    llvm_bin(&ctx, true);
+    assert!(lld_with_llvm_config(&ctx, true).lld_enabled);
+}
+
+#[test]
+#[should_panic(expected = "unless LLD is installed beside it")]
+fn lld_not_beside_external_llvm_config() {
+    let ctx = TestCtx::new();
+    llvm_bin(&ctx, false);
+    lld_with_llvm_config(&ctx, true);
+}
+
+#[test]
+#[should_panic(expected = "unless it is Rust's LLVM")]
+fn lld_beside_external_llvm_config_without_rust_patches() {
+    let ctx = TestCtx::new();
+    llvm_bin(&ctx, true);
+    lld_with_llvm_config(&ctx, false);
 }
 
 #[test]
