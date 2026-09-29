@@ -1280,6 +1280,19 @@ impl CommandLineStep for Enzyme {
     }
 }
 
+/// Returns the LLD installed in the `bin` directory holding `llvm_config`, if there is one.
+///
+/// That is where the `rust-dev` component packages it for `download-ci-llvm`, and where an
+/// external LLVM can provide it.
+pub fn lld_beside_llvm_config(llvm_config: &Path, target: TargetSelection) -> Option<PathBuf> {
+    let bin = llvm_config.parent()?;
+    if bin.file_name()? != "bin" {
+        return None;
+    }
+    let lld = bin.join(exe("lld", target));
+    lld.exists().then_some(lld)
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Lld {
     pub target: TargetSelection,
@@ -1306,18 +1319,13 @@ impl CommandLineStep for Lld {
 
         let LlvmResult { host_llvm_config, llvm_cmake_dir } = builder.ensure(Llvm { target });
 
-        // The `dist` step packages LLD next to LLVM's binaries for download-ci-llvm. The root path
-        // we usually expect here is `./build/$triple/ci-llvm/`, with the binaries in its `bin`
-        // subfolder. We check if that's the case, and if LLD's binary already exists there next to
-        // `llvm-config`: if so, we can use it instead of building LLVM/LLD from source.
-        let ci_llvm_bin = host_llvm_config.parent().unwrap();
-        if ci_llvm_bin.is_dir() && ci_llvm_bin.file_name().unwrap() == "bin" {
-            let lld_path = ci_llvm_bin.join(exe("lld", target));
-            if lld_path.exists() {
-                // The following steps copying `lld` as `rust-lld` to the sysroot, expect it in the
-                // `bin` subfolder of this step's out dir.
-                return ci_llvm_bin.parent().unwrap().to_path_buf();
-            }
+        // The `dist` step packages LLD next to LLVM's binaries for download-ci-llvm, and an
+        // external LLVM can provide it the same way. If LLD's binary already exists next to
+        // `llvm-config`, we can use it instead of building LLVM/LLD from source.
+        if let Some(lld_path) = lld_beside_llvm_config(&host_llvm_config, target) {
+            // The following steps copying `lld` as `rust-lld` to the sysroot, expect it in the
+            // `bin` subfolder of this step's out dir.
+            return lld_path.parent().unwrap().parent().unwrap().to_path_buf();
         }
 
         let out_dir = builder.lld_out(target);
