@@ -671,4 +671,9 @@ pub const CONFIG_CHANGE_HISTORY: &[ChangeInfo] = &[
         severity: ChangeSeverity::Warning,
         summary: "The `override-allocator` option has been renamed: The global setting is now `build.allocator` and the per-target setting is `target.<target>.allocator`. It can now be set to 'system' to explicitly request the system allocator.",
     },
+    ChangeInfo {
+        change_id: 160143,
+        severity: ChangeSeverity::Info,
+        summary: "`rust.lld = true` is now accepted with an external `llvm-config` for the host when it is Rust's LLVM (`llvm-has-rust-patches = true`) and an `lld` is installed beside it, which is then used as `rust-lld`.",
+    },
 ];
