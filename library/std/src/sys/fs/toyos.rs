@@ -204,7 +204,10 @@ impl FileAttr {
     }
 
     pub fn modified(&self) -> io::Result<SystemTime> {
-        Ok(SystemTime::from_nanos(self.mtime))
+        match self.mtime {
+            0 => Err(io::const_error!(io::ErrorKind::Unsupported, "the file is undated")),
+            nanos => Ok(SystemTime::from_nanos(nanos)),
+        }
     }
 
     pub fn accessed(&self) -> io::Result<SystemTime> {
