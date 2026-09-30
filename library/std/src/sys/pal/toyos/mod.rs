@@ -111,22 +111,53 @@ pub fn abort_internal() -> ! {
 mod c_allocator {
     use crate::alloc::{GlobalAlloc, Layout, System};
 
-    const HEADER: usize = 16; // stores the allocation size for free/realloc
-    const ALIGN: usize = 16;
+    /// The alignment every block has at least, and the bytes in front of a
+    /// block that hold its size and its alignment: the layout `free` and
+    /// `realloc` release it at is the one it was allocated with.
+    const MIN_ALIGN: usize = 16;
+
+    /// A block of `size` bytes at `align`, the allocation beginning `align`
+    /// bytes before it.
+    fn layout(size: usize, align: usize) -> Option<Layout> {
+        Layout::from_size_align(align.checked_add(size)?, align).ok()
+    }
+
+    /// The size and alignment in front of `block`.
+    unsafe fn header(block: *mut u8) -> (usize, usize) {
+        unsafe { ((block.sub(16) as *const usize).read(), (block.sub(8) as *const usize).read()) }
+    }
+
+    /// `size` bytes aligned to `align`, a power of two.
+    unsafe fn alloc(size: usize, align: usize) -> *mut u8 {
+        let align = align.max(MIN_ALIGN);
+        let Some(layout) = layout(size, align) else { return core::ptr::null_mut() };
+        let raw = unsafe { System.alloc(layout) };
+        if raw.is_null() {
+            return raw;
+        }
+        unsafe {
+            let block = raw.add(align);
+            (block.sub(16) as *mut usize).write(size);
+            (block.sub(8) as *mut usize).write(align);
+            block
+        }
+    }
 
     #[unsafe(no_mangle)]
     unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
         if size == 0 {
             return core::ptr::null_mut();
         }
-        let total = HEADER + size;
-        let layout = unsafe { Layout::from_size_align_unchecked(total, ALIGN) };
-        let ptr = unsafe { System.alloc(layout) };
-        if ptr.is_null() {
-            return ptr;
+        unsafe { alloc(size, MIN_ALIGN) }
+    }
+
+    /// C11's: null for an alignment that is no power of two.
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn aligned_alloc(align: usize, size: usize) -> *mut u8 {
+        if !align.is_power_of_two() {
+            return core::ptr::null_mut();
         }
-        unsafe { (ptr as *mut usize).write(total) };
-        unsafe { ptr.add(HEADER) }
+        unsafe { alloc(size, align) }
     }
 
     #[unsafe(no_mangle)]
@@ -144,12 +175,13 @@ mod c_allocator {
         if ptr.is_null() {
             return;
         }
-        let base = unsafe { ptr.sub(HEADER) };
-        let total = unsafe { (base as *const usize).read() };
-        let layout = unsafe { Layout::from_size_align_unchecked(total, ALIGN) };
-        unsafe { System.dealloc(base, layout) };
+        let (size, align) = unsafe { header(ptr) };
+        let layout = layout(size, align).expect("a block's header is the layout it was allocated with");
+        unsafe { System.dealloc(ptr.sub(align), layout) };
     }
 
+    /// `System.realloc` keeps the allocation's alignment, so the block stays
+    /// `align` bytes in, its header carried with its bytes.
     #[unsafe(no_mangle)]
     unsafe extern "C" fn realloc(ptr: *mut u8, new_size: usize) -> *mut u8 {
         if ptr.is_null() {
@@ -159,16 +191,18 @@ mod c_allocator {
             free(ptr);
             return core::ptr::null_mut();
         }
-        let base = unsafe { ptr.sub(HEADER) };
-        let old_total = unsafe { (base as *const usize).read() };
-        let new_total = HEADER + new_size;
-        let old_layout = unsafe { Layout::from_size_align_unchecked(old_total, ALIGN) };
-        let new_base = unsafe { System.realloc(base, old_layout, new_total) };
-        if new_base.is_null() {
-            return new_base;
+        let (size, align) = unsafe { header(ptr) };
+        let Some(new) = layout(new_size, align) else { return core::ptr::null_mut() };
+        let old = layout(size, align).expect("a block's header is the layout it was allocated with");
+        let raw = unsafe { System.realloc(ptr.sub(align), old, new.size()) };
+        if raw.is_null() {
+            return raw;
         }
-        unsafe { (new_base as *mut usize).write(new_total) };
-        unsafe { new_base.add(HEADER) }
+        unsafe {
+            let block = raw.add(align);
+            (block.sub(16) as *mut usize).write(new_size);
+            block
+        }
     }
 }
 
