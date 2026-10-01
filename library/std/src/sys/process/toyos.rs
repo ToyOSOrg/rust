@@ -459,9 +459,7 @@ impl Command {
         cwd: &str,
         slot_map: &[[u32; 2]],
     ) -> io::Result<Routed> {
-        use toyos::launch::{
-            self, Launch, LaunchError, MAX_LAUNCH_EXTRAS, MAX_LAUNCH_SLOTS, Outcome,
-        };
+        use toyos::launch::{self, Launch, LaunchError, MAX_LAUNCH_EXTRAS, Outcome};
 
         let for_init = matches!(self.parent, Parent::Init);
         // Where a launch that is not made goes: the direct spawn, which places
@@ -500,9 +498,6 @@ impl Command {
                 "more connectors provided than a launch carries beside its place",
             ));
         }
-        if slot_map.len() > MAX_LAUNCH_SLOTS {
-            return direct(None);
-        }
 
         let place = match self.parent {
             Parent::Init => None,
@@ -528,9 +523,9 @@ impl Command {
         for &[child_slot, parent] in slot_map {
             match toyos_abi::syscall::dup(toyos_abi::RawHandle(parent)) {
                 Ok(copy) => slots.push((child_slot, copy)),
-                Err(_) => {
+                Err(e) => {
                     release(&slots);
-                    return direct(None);
+                    return Err(crate::sys::to_io_error(e));
                 }
             }
         }

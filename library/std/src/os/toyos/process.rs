@@ -59,7 +59,8 @@ pub trait CommandExt {
     ///
     /// `place` is a handle carrying `WRITE` to that process: a copy of the
     /// handle it holds to itself, which it handed on. The spawn is refused
-    /// `PermissionDenied` for a handle without `WRITE`, and `BrokenPipe` for a
+    /// `PermissionDenied` for a handle without `WRITE`, or without `DUP` for a
+    /// program init launches, which carries a copy, and `BrokenPipe` for a
     /// process whose end has begun.
     #[stable(feature = "toyos_ext", since = "1.0.0")]
     fn under(&mut self, place: u32) -> &mut Self;
