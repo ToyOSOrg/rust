@@ -814,27 +814,16 @@ pub fn readdir(p: &Path) -> io::Result<ReadDir> {
     Ok(ReadDir { entries, index: 0 })
 }
 
-/// The kernel's `readdir` encoding: a type byte, the name and a NUL, the size.
+/// The entries of a whole `readdir` listing, read by `syscall::dirent`.
 fn kernel_entries(dir_path: &Path, data: &[u8]) -> Vec<DirEntry> {
     let mut entries = Vec::new();
-    let mut pos = 0;
-    while pos + 1 < data.len() {
-        let entry_type = data[pos];
-        pos += 1;
-        let Some(end) = data[pos..].iter().position(|&b| b == 0).map(|i| pos + i) else { break };
-        let name = crate::str::from_utf8(&data[pos..end]).unwrap_or("");
-        pos = end + 1;
-        if pos + 8 > data.len() {
-            break;
-        }
-        let size = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
-        pos += 8;
-        let is_dir = entry_type == 2;
+    let mut at = 0;
+    while let Some(entry) = syscall::dirent(data, &mut at) {
         entries.push(DirEntry {
             dir_path: dir_path.to_path_buf(),
-            name: OsString::from(name),
-            size,
-            file_type: FileType { is_file: !is_dir, is_dir, is_symlink: false },
+            name: OsString::from(crate::str::from_utf8(entry.name).unwrap_or("")),
+            size: entry.size,
+            file_type: FileType { is_file: !entry.is_dir, is_dir: entry.is_dir, is_symlink: false },
         });
     }
     entries
