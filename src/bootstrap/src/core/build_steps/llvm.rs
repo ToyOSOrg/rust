@@ -530,11 +530,16 @@ impl CommandLineStep for Llvm {
                 // LLVM_NM is required for cross compiling using MSVC
                 cfg.define("LLVM_NM", host_bin.join("llvm-nm").with_extension(EXE_EXTENSION));
             }
-            cfg.define("LLVM_CONFIG_PATH", host_llvm_config);
+            cfg.define("LLVM_CONFIG_PATH", &host_llvm_config);
             if builder.config.llvm_clang {
-                let build_bin =
-                    builder.llvm_out(builder.config.host_target).join("build").join("bin");
-                let clang_tblgen = build_bin.join("clang-tblgen").with_extension(EXE_EXTENSION);
+                // An external LLVM installs `clang-tblgen` beside its `llvm-config`; one built
+                // here leaves it in its build directory.
+                let tblgen_bin = if builder.config.is_system_llvm(builder.config.host_target) {
+                    host_llvm_config.parent().unwrap().to_path_buf()
+                } else {
+                    builder.llvm_out(builder.config.host_target).join("build").join("bin")
+                };
+                let clang_tblgen = tblgen_bin.join("clang-tblgen").with_extension(EXE_EXTENSION);
                 if !builder.config.dry_run() && !clang_tblgen.exists() {
                     panic!("unable to find {}", clang_tblgen.display());
                 }
