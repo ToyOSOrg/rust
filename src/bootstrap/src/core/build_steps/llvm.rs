@@ -711,6 +711,8 @@ fn configure_cmake(
             cfg.define("CMAKE_SYSTEM_NAME", "Windows");
         } else if target.contains("haiku") {
             cfg.define("CMAKE_SYSTEM_NAME", "Haiku");
+        } else if target.contains("toyos") {
+            cfg.define("CMAKE_SYSTEM_NAME", "ToyOS");
         } else if target.contains("solaris") || target.contains("illumos") {
             cfg.define("CMAKE_SYSTEM_NAME", "SunOS");
         } else if target.contains("linux") {
