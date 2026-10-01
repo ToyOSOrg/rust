@@ -1322,14 +1322,9 @@ impl CommandLineStep for Lld {
         let LlvmResult { host_llvm_config, llvm_cmake_dir } = builder.ensure(Llvm { target });
 
         // The `dist` step packages LLD next to LLVM's binaries for download-ci-llvm, and an
-        // external LLVM can provide it the same way. If LLD's binary already exists next to the
-        // `llvm-config` of `target`'s own LLVM, we can use it instead of building LLVM/LLD from
-        // source. When LLVM is built for `target`, the `llvm-config` above is the host's, and so is
-        // an LLD beside it.
-        if let Some(llvm_config) =
-            builder.config.target_config.get(&target).and_then(|t| t.llvm_config.as_deref())
-            && let Some(lld_path) = lld_beside_llvm_config(llvm_config, target)
-        {
+        // external LLVM can provide it the same way. If LLD's binary already exists next to
+        // `llvm-config`, we can use it instead of building LLVM/LLD from source.
+        if let Some(lld_path) = lld_beside_llvm_config(&host_llvm_config, target) {
             // The following steps copying `lld` as `rust-lld` to the sysroot, expect it in the
             // `bin` subfolder of this step's out dir.
             return lld_path.parent().unwrap().parent().unwrap().to_path_buf();
