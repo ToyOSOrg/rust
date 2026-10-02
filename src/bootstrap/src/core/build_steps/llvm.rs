@@ -529,23 +529,17 @@ impl CommandLineStep for Llvm {
                 );
                 // LLVM_NM is required for cross compiling using MSVC
                 cfg.define("LLVM_NM", host_bin.join("llvm-nm").with_extension(EXE_EXTENSION));
-                if builder.config.llvm_clang {
-                    // An external LLVM installs `clang-tblgen` beside `llvm-tblgen`; one built
-                    // here leaves it in its build directory.
-                    let tblgen_bin = if builder.config.is_system_llvm(builder.config.host_target) {
-                        host_bin.to_path_buf()
-                    } else {
-                        builder.llvm_out(builder.config.host_target).join("build").join("bin")
-                    };
-                    let clang_tblgen =
-                        tblgen_bin.join("clang-tblgen").with_extension(EXE_EXTENSION);
-                    if !clang_tblgen.exists() {
-                        panic!("unable to find {}", clang_tblgen.display());
-                    }
-                    cfg.define("CLANG_TABLEGEN", clang_tblgen);
-                }
             }
             cfg.define("LLVM_CONFIG_PATH", host_llvm_config);
+            if builder.config.llvm_clang {
+                let build_bin =
+                    builder.llvm_out(builder.config.host_target).join("build").join("bin");
+                let clang_tblgen = build_bin.join("clang-tblgen").with_extension(EXE_EXTENSION);
+                if !builder.config.dry_run() && !clang_tblgen.exists() {
+                    panic!("unable to find {}", clang_tblgen.display());
+                }
+                cfg.define("CLANG_TABLEGEN", clang_tblgen);
+            }
         }
 
         let llvm_version_suffix = if let Some(ref suffix) = builder.config.llvm_version_suffix {
@@ -1328,14 +1322,9 @@ impl CommandLineStep for Lld {
         let LlvmResult { host_llvm_config, llvm_cmake_dir } = builder.ensure(Llvm { target });
 
         // The `dist` step packages LLD next to LLVM's binaries for download-ci-llvm, and an
-        // external LLVM can provide it the same way. If LLD's binary already exists next to the
-        // `llvm-config` of `target`'s own LLVM, we can use it instead of building LLVM/LLD from
-        // source. When LLVM is built for `target`, the `llvm-config` above is the host's, and so is
-        // an LLD beside it.
-        if let Some(llvm_config) =
-            builder.config.target_config.get(&target).and_then(|t| t.llvm_config.as_deref())
-            && let Some(lld_path) = lld_beside_llvm_config(llvm_config, target)
-        {
+        // external LLVM can provide it the same way. If LLD's binary already exists next to
+        // `llvm-config`, we can use it instead of building LLVM/LLD from source.
+        if let Some(lld_path) = lld_beside_llvm_config(&host_llvm_config, target) {
             // The following steps copying `lld` as `rust-lld` to the sysroot, expect it in the
             // `bin` subfolder of this step's out dir.
             return lld_path.parent().unwrap().parent().unwrap().to_path_buf();
