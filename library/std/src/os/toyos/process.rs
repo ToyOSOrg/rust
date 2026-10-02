@@ -53,6 +53,28 @@ pub trait CommandExt {
     /// undoes it.
     #[stable(feature = "toyos_ext", since = "1.0.0")]
     fn prepare(&mut self) -> crate::io::Result<&mut Self>;
+
+    /// Place the child under the process `place` names rather than under this
+    /// one, so that its end, not this process's, takes the child down.
+    ///
+    /// `place` is a handle carrying `WRITE` to that process: a copy of the
+    /// handle it holds to itself, which it handed on. The spawn is refused
+    /// `PermissionDenied` for a handle without `WRITE`, or without `DUP` for a
+    /// program init launches, which carries a copy, and `BrokenPipe` for a
+    /// process whose end has begun.
+    #[stable(feature = "toyos_ext", since = "1.0.0")]
+    fn under(&mut self, place: u32) -> &mut Self;
+
+    /// Ask init to be the child's parent: the one way for a child to outlive
+    /// this process.
+    ///
+    /// **A launch or nothing.** init starts a program its manifest declares,
+    /// holding what its row says, so with no `launcher` connector, for a
+    /// program no row declares, or for a command that endows a handle or names
+    /// a slot beyond stdio, the spawn answers `PermissionDenied` and starts
+    /// nothing.
+    #[stable(feature = "toyos_ext", since = "1.0.0")]
+    fn under_init(&mut self) -> &mut Self;
 }
 
 #[stable(feature = "toyos_ext", since = "1.0.0")]
@@ -75,6 +97,16 @@ impl CommandExt for crate::process::Command {
     fn prepare(&mut self) -> crate::io::Result<&mut Self> {
         self.as_inner_mut().prepare()?;
         Ok(self)
+    }
+
+    fn under(&mut self, place: u32) -> &mut Self {
+        self.as_inner_mut().under(place);
+        self
+    }
+
+    fn under_init(&mut self) -> &mut Self {
+        self.as_inner_mut().under_init();
+        self
     }
 }
 
