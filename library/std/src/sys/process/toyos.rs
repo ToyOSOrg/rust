@@ -459,9 +459,7 @@ impl Command {
         cwd: &str,
         slot_map: &[[u32; 2]],
     ) -> io::Result<Routed> {
-        use toyos::launch::{
-            self, Launch, LaunchError, MAX_LAUNCH_EXTRAS, MAX_LAUNCH_SLOTS, Outcome,
-        };
+        use toyos::launch::{self, Launch, LaunchError, MAX_LAUNCH_EXTRAS, Outcome};
 
         let for_init = matches!(self.parent, Parent::Init);
         // Where a launch that is not made goes: the direct spawn, which places
@@ -492,22 +490,25 @@ impl Command {
         // become a second reader of it.
         let program = resolved.to_str().unwrap_or("");
 
-        // A place is one of the batch's extras.
-        if self.provided.len() + usize::from(!for_init) > MAX_LAUNCH_EXTRAS
-            || slot_map.len() > MAX_LAUNCH_SLOTS
-        {
-            return direct(None);
+        // A place is one of the batch's extras. Refused rather than spawned
+        // directly: that child would hold this process's namespace, not its row.
+        if self.provided.len() + usize::from(!for_init) > MAX_LAUNCH_EXTRAS {
+            return Err(io::const_error!(
+                io::ErrorKind::InvalidInput,
+                "more connectors provided than a launch carries beside its place",
+            ));
         }
 
         let place = match self.parent {
             Parent::Init => None,
             Parent::Place(place) => Some(toyos_abi::RawHandle(place)),
-            Parent::Caller => toyos::endow::this_process().map(toyos::AsHandle::as_handle),
+            Parent::Caller => Some(toyos::AsHandle::as_handle(toyos::endow::this_process())),
         };
-        let parent = match place.map(toyos_abi::syscall::dup) {
-            None if for_init => launch::Parent::Init,
-            Some(Ok(copy)) => launch::Parent::Place(copy),
-            None | Some(Err(_)) => return direct(None),
+        let parent = match place {
+            None => launch::Parent::Init,
+            Some(place) => launch::Parent::Place(
+                toyos_abi::syscall::dup(place).map_err(crate::sys::to_io_error)?,
+            ),
         };
         let release = |slots: &[(u32, toyos_abi::RawHandle)]| {
             for (_, h) in slots {
@@ -522,9 +523,9 @@ impl Command {
         for &[child_slot, parent] in slot_map {
             match toyos_abi::syscall::dup(toyos_abi::RawHandle(parent)) {
                 Ok(copy) => slots.push((child_slot, copy)),
-                Err(_) => {
+                Err(e) => {
                     release(&slots);
-                    return direct(None);
+                    return Err(crate::sys::to_io_error(e));
                 }
             }
         }
