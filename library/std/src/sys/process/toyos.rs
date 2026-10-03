@@ -26,6 +26,9 @@ pub struct Command {
     endowments: Vec<(String, u32)>,
     provided: Vec<(String, u32)>,
     parent: Parent,
+    /// Where the image is read from, when it is not `argv[0]`. `argv[0]` then
+    /// only names the child; nothing opens it.
+    image_path: Option<OsString>,
     prepared: Option<Prepared>,
 }
 
@@ -94,12 +97,27 @@ impl Command {
             endowments: Vec::new(),
             provided: Vec::new(),
             parent: Parent::Caller,
+            image_path: None,
             prepared: None,
         }
     }
 
     pub fn arg(&mut self, arg: &OsStr) {
         self.args.push(arg.to_owned());
+    }
+
+    /// Read the child's image from `path` rather than from the program named as
+    /// `argv[0]`, forcing the read even for a kernel-served path the kernel
+    /// would otherwise open from `argv[0]` itself.
+    ///
+    /// The one caller is the supervisor's launcher, which names a declared row's
+    /// own path here: the image is read once, from the path the row declares,
+    /// so a caller-writable `argv[0]` — a symlink the caller can re-point —
+    /// cannot swap the bytes a declared program runs. `argv[0]` is left as the
+    /// caller named it, so an applet still learns which name it was invoked as.
+    pub fn image_from(&mut self, path: &OsStr) {
+        self.image_path = Some(path.to_owned());
+        self.prepared = None;
     }
 
     pub fn env_mut(&mut self) -> &mut CommandEnv {
@@ -116,9 +134,15 @@ impl Command {
     pub fn prepare(&mut self) -> io::Result<()> {
         let program = self.resolve_program()?;
         let cwd = self.child_cwd()?;
-        let image = match crate::sys::fs::is_served(Path::new(&program)) {
-            true => Some(crate::sys::fs::read_image(Path::new(&program))?),
-            false => None,
+        // An `image_from` path is read here whatever mount it is on; otherwise
+        // only a file server's program is read, and a kernel-served one is left
+        // for the kernel to open from `argv[0]`.
+        let image = match &self.image_path {
+            Some(path) => Some(crate::sys::fs::read_image(Path::new(path))?),
+            None if crate::sys::fs::is_served(Path::new(&program)) => {
+                Some(crate::sys::fs::read_image(Path::new(&program))?)
+            }
+            None => None,
         };
         self.prepared = Some(Prepared { program, cwd, image });
         Ok(())
@@ -355,15 +379,21 @@ impl Command {
         // opens only what it serves itself.
         let image = match prepared_image {
             Some(image) => Some(image),
-            None if crate::sys::fs::is_served(Path::new(&resolved)) => {
-                Some(crate::sys::fs::read_image(Path::new(&resolved)).map_err(|e| {
-                    if let Some(handle) = inherited {
-                        toyos_abi::syscall::close(handle);
-                    }
-                    e
-                })?)
+            None => {
+                // `image_from` forces a read from the path it names; otherwise
+                // only a file server's program is read here, a kernel-served one
+                // being opened by the kernel from `argv[0]`.
+                let source = self.image_path.as_deref().unwrap_or(resolved.as_os_str());
+                let read = self.image_path.is_some() || crate::sys::fs::is_served(Path::new(source));
+                read.then(|| crate::sys::fs::read_image(Path::new(source)))
+                    .transpose()
+                    .map_err(|e| {
+                        if let Some(handle) = inherited {
+                            toyos_abi::syscall::close(handle);
+                        }
+                        e
+                    })?
             }
-            None => None,
         };
 
         let spawn_args = toyos_abi::syscall::SpawnArgs {

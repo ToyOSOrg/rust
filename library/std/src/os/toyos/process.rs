@@ -54,6 +54,20 @@ pub trait CommandExt {
     #[stable(feature = "toyos_ext", since = "1.0.0")]
     fn prepare(&mut self) -> crate::io::Result<&mut Self>;
 
+    /// Read the child's image from `path` rather than from the program named as
+    /// `argv[0]`.
+    ///
+    /// The kernel opens `argv[0]` for the image only when the caller passes
+    /// none; passing one read from `path` leaves `argv[0]` a name alone. The
+    /// supervisor's launcher names a declared program's own path here, so a
+    /// caller-writable `argv[0]` — a symlink the caller can re-point between
+    /// the launcher resolving the row and the kernel loading it — cannot swap
+    /// the bytes that program runs. The read is taken by
+    /// [`prepare`](CommandExt::prepare) or by the spawn, from whichever mount
+    /// `path` is on.
+    #[stable(feature = "toyos_ext", since = "1.0.0")]
+    fn image_from(&mut self, path: &crate::path::Path) -> &mut Self;
+
     /// Place the child under the process `place` names rather than under this
     /// one, so that its end, not this process's, takes the child down.
     ///
@@ -97,6 +111,11 @@ impl CommandExt for crate::process::Command {
     fn prepare(&mut self) -> crate::io::Result<&mut Self> {
         self.as_inner_mut().prepare()?;
         Ok(self)
+    }
+
+    fn image_from(&mut self, path: &crate::path::Path) -> &mut Self {
+        self.as_inner_mut().image_from(path.as_os_str());
+        self
     }
 
     fn under(&mut self, place: u32) -> &mut Self {
