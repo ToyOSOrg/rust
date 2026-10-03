@@ -23,10 +23,10 @@ fn net_err_to_io(e: NetError) -> io::Error {
         NetError::AddrInUse => io::ErrorKind::AddrInUse,
         NetError::NotConnected => io::ErrorKind::NotConnected,
         NetError::InvalidInput => io::ErrorKind::InvalidInput,
-        NetError::NetdNotFound => io::ErrorKind::NotConnected,
+        NetError::NetstackNotFound => io::ErrorKind::NotConnected,
         _ => io::ErrorKind::Other,
     };
-    io::Error::new(kind, "netd error")
+    io::Error::new(kind, "netstack error")
 }
 
 fn addr_to_v4(addr: &SocketAddr) -> io::Result<([u8; 4], u16)> {
@@ -84,7 +84,7 @@ fn with_timeout(
 
 const TIMED_OUT: io::Error = io::const_error!(io::ErrorKind::TimedOut, "timed out");
 
-/// The connection was reset, or ended by netd: its send pipe has no reader.
+/// The connection was reset, or ended by netstack: its send pipe has no reader.
 const RESET: io::Error = io::const_error!(io::ErrorKind::ConnectionReset, "connection reset");
 
 const SHUT_DOWN: io::Error =
@@ -102,16 +102,16 @@ fn make_socket_fd(rx: toyos::Pipe, tx: toyos::Pipe) -> io::Result<OwnedFd> {
 
 // --- Shared socket ownership (prevents double-close on duplicate) ---
 
-enum NetdSocket {
+enum NetstackSocket {
     Tcp(TcpSocketId),
     Udp(UdpSocketId),
 }
 
-impl Drop for NetdSocket {
+impl Drop for NetstackSocket {
     fn drop(&mut self) {
         let _ = match self {
-            NetdSocket::Tcp(id) => toyos::net::tcp_close(*id),
-            NetdSocket::Udp(id) => toyos::net::udp_close(*id),
+            NetstackSocket::Tcp(id) => toyos::net::tcp_close(*id),
+            NetstackSocket::Udp(id) => toyos::net::udp_close(*id),
         };
     }
 }
@@ -120,7 +120,7 @@ impl Drop for NetdSocket {
 
 pub struct TcpStream {
     fd: OwnedFd,
-    socket: Arc<NetdSocket>,
+    socket: Arc<NetstackSocket>,
     /// `shutdown` was asked for this half, on this stream or a duplicate.
     read_shut: Arc<AtomicBool>,
     write_shut: Arc<AtomicBool>,
@@ -136,7 +136,7 @@ impl TcpStream {
     fn new(fd: OwnedFd, id: TcpSocketId, peer: SocketAddr, local_port: u16) -> TcpStream {
         TcpStream {
             fd,
-            socket: Arc::new(NetdSocket::Tcp(id)),
+            socket: Arc::new(NetstackSocket::Tcp(id)),
             read_shut: Arc::new(AtomicBool::new(false)),
             write_shut: Arc::new(AtomicBool::new(false)),
             peer,
@@ -150,7 +150,7 @@ impl TcpStream {
 
     fn socket_id(&self) -> TcpSocketId {
         match *self.socket {
-            NetdSocket::Tcp(id) => id,
+            NetstackSocket::Tcp(id) => id,
             _ => unreachable!(),
         }
     }
@@ -215,7 +215,7 @@ impl TcpStream {
         }
     }
 
-    /// Whether the receive pipe's end was the peer's FIN or not. netd ends
+    /// Whether the receive pipe's end was the peer's FIN or not. netstack ends
     /// the send pipe too, and first, when the connection did not end in
     /// order — a reset, a timeout — so a send pipe with no
     /// reader behind a receive pipe at its end is a reset.
@@ -365,7 +365,7 @@ impl TcpStream {
     }
 }
 
-// No Drop impl — Arc<NetdSocket> handles close on last drop.
+// No Drop impl — Arc<NetstackSocket> handles close on last drop.
 // OwnedFd drop closes the pipe-backed socket fd.
 
 impl fmt::Debug for TcpStream {
@@ -378,7 +378,7 @@ impl fmt::Debug for TcpStream {
 
 pub struct TcpListener {
     notify_fd: OwnedFd,
-    socket: Arc<NetdSocket>,
+    socket: Arc<NetstackSocket>,
     local: SocketAddr,
     nonblocking: AtomicBool,
 }
@@ -386,7 +386,7 @@ pub struct TcpListener {
 impl TcpListener {
     fn socket_id(&self) -> TcpSocketId {
         match *self.socket {
-            NetdSocket::Tcp(id) => id,
+            NetstackSocket::Tcp(id) => id,
             _ => unreachable!(),
         }
     }
@@ -400,7 +400,7 @@ impl TcpListener {
         let bound = toyos::net::tcp_bind(ip, port).map_err(net_err_to_io)?;
         Ok(TcpListener {
             notify_fd: unsafe { OwnedFd::from_raw_fd(bound.notify.into_raw().0 as i32) },
-            socket: Arc::new(NetdSocket::Tcp(bound.socket_id)),
+            socket: Arc::new(NetstackSocket::Tcp(bound.socket_id)),
             local: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(ip), bound.bound_port)),
             nonblocking: AtomicBool::new(false),
         })
@@ -474,7 +474,7 @@ impl TcpListener {
     }
 }
 
-// No Drop impl — Arc<NetdSocket> handles close on last drop.
+// No Drop impl — Arc<NetstackSocket> handles close on last drop.
 
 impl fmt::Debug for TcpListener {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -485,7 +485,7 @@ impl fmt::Debug for TcpListener {
 // --- UdpSocket ---
 
 pub struct UdpSocket {
-    socket: Arc<NetdSocket>,
+    socket: Arc<NetstackSocket>,
     tx_fd: OwnedFd,
     rx_fd: OwnedFd,
     local: SocketAddr,
@@ -497,7 +497,7 @@ pub struct UdpSocket {
 impl UdpSocket {
     fn socket_id(&self) -> UdpSocketId {
         match *self.socket {
-            NetdSocket::Udp(id) => id,
+            NetstackSocket::Udp(id) => id,
             _ => unreachable!(),
         }
     }
@@ -510,7 +510,7 @@ impl UdpSocket {
         let (ip, port) = addr_to_v4(&addr)?;
         let bound = toyos::net::udp_bind(ip, port).map_err(net_err_to_io)?;
         Ok(UdpSocket {
-            socket: Arc::new(NetdSocket::Udp(bound.socket_id)),
+            socket: Arc::new(NetstackSocket::Udp(bound.socket_id)),
             tx_fd: unsafe { OwnedFd::from_raw_fd(bound.tx.into_raw().0 as i32) },
             rx_fd: unsafe { OwnedFd::from_raw_fd(bound.rx.into_raw().0 as i32) },
             local: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(ip), bound.bound_port)),
@@ -691,7 +691,7 @@ impl UdpSocket {
     }
 }
 
-// No Drop impl — Arc<NetdSocket> handles close on last drop.
+// No Drop impl — Arc<NetstackSocket> handles close on last drop.
 // OwnedFd drops close the pipe fds.
 
 impl fmt::Debug for UdpSocket {

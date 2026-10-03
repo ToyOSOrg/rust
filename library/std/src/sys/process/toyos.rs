@@ -36,8 +36,8 @@ enum Parent {
     Caller,
     /// The process a handle carrying `WRITE` names.
     Place(u32),
-    /// init, asked through the launcher.
-    Init,
+    /// The supervisor, asked through the launcher.
+    Supervisor,
 }
 
 /// The file reads a spawn needs, made ahead of it ([`Command::prepare`]).
@@ -50,9 +50,9 @@ struct Prepared {
 
 /// Where a spawn goes once the launcher has been asked, or could not be.
 enum Routed {
-    /// init started it.
+    /// The supervisor started it.
     Started(Process),
-    /// This process spawns it, with the `HOME` init answered for it if it did.
+    /// This process spawns it, with the `HOME` the supervisor answered for it if it did.
     Direct { home: Option<OsString> },
 }
 
@@ -190,9 +190,9 @@ impl Command {
         self.parent = Parent::Place(place);
     }
 
-    /// Ask init to be the child's parent, through the launcher or not at all.
-    pub fn under_init(&mut self) {
-        self.parent = Parent::Init;
+    /// Ask the supervisor to be the child's parent, through the launcher or not at all.
+    pub fn under_supervisor(&mut self) {
+        self.parent = Parent::Supervisor;
     }
 
     /// A duplicate of this process's own namespace handle, for the child to be
@@ -253,14 +253,14 @@ impl Command {
         default: Stdio,
         _needs_stdin: bool,
     ) -> io::Result<(Process, StdioPipes)> {
-        // init is reached only by a launch, which carries no endowment and no
+        // The supervisor is reached only by a launch, which carries no endowment and no
         // slot beyond stdio.
-        if matches!(self.parent, Parent::Init)
+        if matches!(self.parent, Parent::Supervisor)
             && (!self.endowments.is_empty() || !self.extra_slots.is_empty())
         {
             return Err(io::const_error!(
                 io::ErrorKind::PermissionDenied,
-                "init starts only a launch, which carries no endowment and no extra slot",
+                "the supervisor starts only a launch, which carries no endowment and no extra slot",
             ));
         }
         let prepared = self.prepared.take();
@@ -306,10 +306,10 @@ impl Command {
         // launcher when it holds one, and falls back for a program the image
         // does not declare. A caller with no `launcher` connector gets plain
         // inheritance, which is what a program endowed nothing should get —
-        // of everything but `HOME` (`direct_env`). A child asked of init is a
+        // of everything but `HOME` (`direct_env`). A child asked of the supervisor is a
         // launch or nothing.
         let decided = !self.endowments.is_empty() || !self.extra_slots.is_empty();
-        let mut home_from_init = None;
+        let mut home_from_supervisor = None;
         if !decided {
             match self.launch(&resolved, &argv_buf, &env_buf, &cwd, &slot_map)? {
                 Routed::Started(process) => {
@@ -319,7 +319,7 @@ impl Command {
                         StdioPipes { stdin: stdin_pipe, stdout: stdout_pipe, stderr: stderr_pipe },
                     ));
                 }
-                Routed::Direct { home } => home_from_init = home,
+                Routed::Direct { home } => home_from_supervisor = home,
             }
         }
         // The label blob and the entries that index it, made after the routing:
@@ -349,7 +349,7 @@ impl Command {
         if let Some(handle) = inherited {
             push(toyos_abi::syscall::SVC_LABEL, handle.0, &mut labels);
         }
-        let env_buf = env_blob(&self.direct_env(capture, home_from_init));
+        let env_buf = env_blob(&self.direct_env(capture, home_from_supervisor));
         // A program on a file server is read here, into a memory object of
         // this process's own that the kernel pages the child from: the kernel
         // opens only what it serves itself.
@@ -384,7 +384,7 @@ impl Command {
             place: match self.parent {
                 Parent::Caller => u64::from(toyos_abi::HANDLE_INVALID.0),
                 Parent::Place(place) => u64::from(place),
-                Parent::Init => unreachable!("a child asked of init is launched or refused"),
+                Parent::Supervisor => unreachable!("a child asked of the supervisor is launched or refused"),
             },
         };
         // SAFETY: spawn_args contains valid pointers to stack-local buffers that outlive the call.
@@ -416,15 +416,15 @@ impl Command {
 
     /// The environment a direct spawn carries: the caller's, except `HOME`.
     ///
-    /// **A direct child's `HOME` is one its caller named or one init answered
-    /// for it, never the one this process was started with.** init decides
+    /// **A direct child's `HOME` is one its caller named or one the supervisor answered
+    /// for it, never the one this process was started with.** The supervisor decides
     /// every program's `HOME` from its row, and a service's is its own
-    /// `/state/<name>`: a child init never saw would otherwise carry a location
+    /// `/state/<name>`: a child the supervisor never saw would otherwise carry a location
     /// decided for its parent alone.
     fn direct_env(
         &self,
         mut env: BTreeMap<EnvKey, OsString>,
-        from_init: Option<OsString>,
+        from_supervisor: Option<OsString>,
     ) -> BTreeMap<EnvKey, OsString> {
         let home = OsStr::new("HOME");
         let named = self.env.iter().find(|(key, _)| *key == home).map(|(_, value)| value);
@@ -435,7 +435,7 @@ impl Command {
             }
             Some(None) => {}
             None => {
-                if let Some(value) = from_init {
+                if let Some(value) = from_supervisor {
                     env.insert(home.to_owned(), value);
                 }
             }
@@ -443,9 +443,9 @@ impl Command {
         env
     }
 
-    /// Ask `/bin/init` to start this program, or answer [`Routed::Direct`] for
+    /// Ask the supervisor to start this program, or answer [`Routed::Direct`] for
     /// a caller that cannot or a program the manifest does not declare — but a
-    /// child asked of init is launched or refused `PermissionDenied`, never
+    /// child asked of the supervisor is launched or refused `PermissionDenied`, never
     /// spawned here.
     ///
     /// The stdio handles and the place are **duplicated** before they go: a
@@ -461,12 +461,12 @@ impl Command {
     ) -> io::Result<Routed> {
         use toyos::launch::{self, Launch, LaunchError, MAX_LAUNCH_EXTRAS, Outcome};
 
-        let for_init = matches!(self.parent, Parent::Init);
+        let for_supervisor = matches!(self.parent, Parent::Supervisor);
         // Where a launch that is not made goes: the direct spawn, which places
-        // the child where this one would have, or nowhere for init.
+        // the child where this one would have, or nowhere for the supervisor.
         let direct = |home: Option<OsString>| {
-            if for_init {
-                Err(io::const_error!(io::ErrorKind::PermissionDenied, "init did not launch it"))
+            if for_supervisor {
+                Err(io::const_error!(io::ErrorKind::PermissionDenied, "the supervisor did not launch it"))
             } else {
                 Ok(Routed::Direct { home })
             }
@@ -486,13 +486,13 @@ impl Command {
 
         // The whole path, not a key: `/bin/ls` is a symlink to `/bin/toybox`
         // and the row that says what an applet holds is `toybox`'s. Resolving
-        // that is init's — it holds the manifest and this process must not
+        // that is the supervisor's — it holds the manifest and this process must not
         // become a second reader of it.
         let program = resolved.to_str().unwrap_or("");
 
         // A place is one of the batch's extras. Refused rather than spawned
         // directly: that child would hold this process's namespace, not its row.
-        if self.provided.len() + usize::from(!for_init) > MAX_LAUNCH_EXTRAS {
+        if self.provided.len() + usize::from(!for_supervisor) > MAX_LAUNCH_EXTRAS {
             return Err(io::const_error!(
                 io::ErrorKind::InvalidInput,
                 "more connectors provided than a launch carries beside its place",
@@ -500,12 +500,12 @@ impl Command {
         }
 
         let place = match self.parent {
-            Parent::Init => None,
+            Parent::Supervisor => None,
             Parent::Place(place) => Some(toyos_abi::RawHandle(place)),
             Parent::Caller => Some(toyos::AsHandle::as_handle(toyos::endow::this_process())),
         };
         let parent = match place {
-            None => launch::Parent::Init,
+            None => launch::Parent::Supervisor,
             Some(place) => launch::Parent::Place(
                 toyos_abi::syscall::dup(place).map_err(crate::sys::to_io_error)?,
             ),
@@ -544,21 +544,21 @@ impl Command {
         // kernel answers by ending it. The launcher releases what it took.
         match answer {
             Ok(Outcome::Started(handle)) => {
-                // SAFETY: init moved this handle into our table and holds none.
+                // SAFETY: the supervisor moved this handle into our table and holds none.
                 Ok(Routed::Started(Process {
                     handle: unsafe { toyos::process::Process::from_raw(handle) },
                 }))
             }
             // The direct path, which is what §4.5 clause 2 says an undeclared
             // program gets. A caller that transferred connectors loses nothing
-            // by it: init merges a launched program's extras into the namespace
+            // by it: the supervisor merges a launched program's extras into the namespace
             // it builds, so a caller that was itself launched already carries
             // them, and the child inherits that. What the direct path cannot do
             // is merge a name into an *inherited* namespace — no caller in the
             // tree needs it, and
             // `issues/isolation/a-provided-name-cannot-reach-an-undeclared-child.md`
             // is where that is written down.
-            // It carries the `HOME` init decided for the program, which the
+            // It carries the `HOME` the supervisor decided for the program, which the
             // direct spawn hands on in place of this process's own.
             Ok(Outcome::NotDeclared { home }) => direct(Some(home.into())),
             Ok(Outcome::Refused) | Err(LaunchError::Sent(_)) => {

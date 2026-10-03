@@ -33,10 +33,10 @@ pub trait CommandExt {
     /// the manifest says the child holds.
     ///
     /// **This is a launch, not a spawn.** A terminal's `surface` port exists
-    /// once per terminal, so `/bin/init` cannot know it and the manifest cannot
+    /// once per terminal, so the supervisor cannot know it and the manifest cannot
     /// name it — but the shell's own `[programs]` row is what should decide the
     /// rest of what a shell holds. So the caller supplies this one connector,
-    /// init supplies the row, and the child's namespace is the union.
+    /// the supervisor supplies the row, and the child's namespace is the union.
     ///
     /// The connector is **moved**, like [`endow`](CommandExt::endow), and the
     /// spawn fails if this process holds no `launcher` connector: there is
@@ -48,7 +48,7 @@ pub trait CommandExt {
     /// find the program, judge the working directory, and read a program on a
     /// file server into memory. The spawn then calls no file server for them —
     /// for a caller whose spawning thread may not wait on one, as
-    /// `/system/bin/init`'s loop may not wait on the file servers it starts
+    /// `/system/bin/supervisor`'s loop may not wait on the file servers it starts
     /// again. A later [`current_dir`](crate::process::Command::current_dir)
     /// undoes it.
     #[stable(feature = "toyos_ext", since = "1.0.0")]
@@ -60,21 +60,21 @@ pub trait CommandExt {
     /// `place` is a handle carrying `WRITE` to that process: a copy of the
     /// handle it holds to itself, which it handed on. The spawn is refused
     /// `PermissionDenied` for a handle without `WRITE`, or without `DUP` for a
-    /// program init launches, which carries a copy, and `BrokenPipe` for a
+    /// program the supervisor launches, which carries a copy, and `BrokenPipe` for a
     /// process whose end has begun.
     #[stable(feature = "toyos_ext", since = "1.0.0")]
     fn under(&mut self, place: u32) -> &mut Self;
 
-    /// Ask init to be the child's parent: the one way for a child to outlive
+    /// Ask the supervisor to be the child's parent: the one way for a child to outlive
     /// this process.
     ///
-    /// **A launch or nothing.** init starts a program its manifest declares,
+    /// **A launch or nothing.** The supervisor starts a program its manifest declares,
     /// holding what its row says, so with no `launcher` connector, for a
     /// program no row declares, or for a command that endows a handle or names
     /// a slot beyond stdio, the spawn answers `PermissionDenied` and starts
     /// nothing.
     #[stable(feature = "toyos_ext", since = "1.0.0")]
-    fn under_init(&mut self) -> &mut Self;
+    fn under_supervisor(&mut self) -> &mut Self;
 }
 
 #[stable(feature = "toyos_ext", since = "1.0.0")]
@@ -104,8 +104,8 @@ impl CommandExt for crate::process::Command {
         self
     }
 
-    fn under_init(&mut self) -> &mut Self {
-        self.as_inner_mut().under_init();
+    fn under_supervisor(&mut self) -> &mut Self {
+        self.as_inner_mut().under_supervisor();
         self
     }
 }
@@ -116,7 +116,7 @@ pub trait ChildExt {
     /// Give up this process's handle, for one about to be sent or endowed.
     ///
     /// After this the parent no longer holds the child: it cannot wait for it,
-    /// kill it or read its accounting. `/bin/init`'s launcher is the caller —
+    /// kill it or read its accounting. The supervisor's launcher is the caller —
     /// it answers with the handle and keeps none, because a process that could
     /// ask it to start `/bin/true` in a loop would otherwise exhaust the one
     /// handle table the whole machine depends on.

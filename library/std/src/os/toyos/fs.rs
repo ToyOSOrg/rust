@@ -12,7 +12,7 @@ pub fn symlink<P: AsRef<Path>, Q: AsRef<Path>>(original: P, link: Q) -> io::Resu
 /// Resolve this process's files through `namespace`, a namespace handle it
 /// owns and gives up here.
 ///
-/// For the one process no parent endows a namespace: init builds the machine's
+/// For the one process no parent endows a namespace: the supervisor builds the machine's
 /// directory capabilities itself. Refused, and the handle closed, when this
 /// process already resolves through one.
 ///
