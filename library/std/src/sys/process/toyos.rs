@@ -384,7 +384,9 @@ impl Command {
             place: match self.parent {
                 Parent::Caller => u64::from(toyos_abi::HANDLE_INVALID.0),
                 Parent::Place(place) => u64::from(place),
-                Parent::Supervisor => unreachable!("a child asked of the supervisor is launched or refused"),
+                Parent::Supervisor => {
+                    unreachable!("a child asked of the supervisor is launched or refused")
+                }
             },
         };
         // SAFETY: spawn_args contains valid pointers to stack-local buffers that outlive the call.
@@ -466,7 +468,10 @@ impl Command {
         // the child where this one would have, or nowhere for the supervisor.
         let direct = |home: Option<OsString>| {
             if for_supervisor {
-                Err(io::const_error!(io::ErrorKind::PermissionDenied, "the supervisor did not launch it"))
+                Err(io::const_error!(
+                    io::ErrorKind::PermissionDenied,
+                    "the supervisor did not launch it"
+                ))
             } else {
                 Ok(Routed::Direct { home })
             }
