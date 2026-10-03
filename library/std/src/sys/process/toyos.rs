@@ -26,8 +26,7 @@ pub struct Command {
     endowments: Vec<(String, u32)>,
     provided: Vec<(String, u32)>,
     parent: Parent,
-    /// Where the image is read from, when it is not `argv[0]`. `argv[0]` then
-    /// only names the child; nothing opens it.
+    /// The program the child runs, when it is not the one `argv[0]` names.
     image_path: Option<OsString>,
     prepared: Option<Prepared>,
 }
@@ -106,15 +105,8 @@ impl Command {
         self.args.push(arg.to_owned());
     }
 
-    /// Read the child's image from `path` rather than from the program named as
-    /// `argv[0]`, forcing the read even for a kernel-served path the kernel
-    /// would otherwise open from `argv[0]` itself.
-    ///
-    /// The one caller is the supervisor's launcher, which names a declared row's
-    /// own path here: the image is read once, from the path the row declares,
-    /// so a caller-writable `argv[0]` — a symlink the caller can re-point —
-    /// cannot swap the bytes a declared program runs. `argv[0]` is left as the
-    /// caller named it, so an applet still learns which name it was invoked as.
+    /// Run the program at `path` rather than the one `argv[0]` names, which
+    /// stays the child's first argument.
     pub fn image_from(&mut self, path: &OsStr) {
         self.image_path = Some(path.to_owned());
         self.prepared = None;
@@ -134,15 +126,10 @@ impl Command {
     pub fn prepare(&mut self) -> io::Result<()> {
         let program = self.resolve_program()?;
         let cwd = self.child_cwd()?;
-        // An `image_from` path is read here whatever mount it is on; otherwise
-        // only a file server's program is read, and a kernel-served one is left
-        // for the kernel to open from `argv[0]`.
-        let image = match &self.image_path {
-            Some(path) => Some(crate::sys::fs::read_image(Path::new(path))?),
-            None if crate::sys::fs::is_served(Path::new(&program)) => {
-                Some(crate::sys::fs::read_image(Path::new(&program))?)
-            }
-            None => None,
+        let source = Path::new(self.image_path.as_deref().unwrap_or(&program));
+        let image = match crate::sys::fs::is_served(source) {
+            true => Some(crate::sys::fs::read_image(source)?),
+            false => None,
         };
         self.prepared = Some(Prepared { program, cwd, image });
         Ok(())
@@ -287,6 +274,15 @@ impl Command {
                 "the supervisor starts only a launch, which carries no endowment and no extra slot",
             ));
         }
+        // A launch runs the program its row names, never one the caller chose.
+        if self.image_path.is_some()
+            && (matches!(self.parent, Parent::Supervisor) || !self.provided.is_empty())
+        {
+            return Err(io::const_error!(
+                io::ErrorKind::PermissionDenied,
+                "a launch runs its row's own program, so it takes no image the caller names",
+            ));
+        }
         let prepared = self.prepared.take();
         let (resolved, cwd, prepared_image) = match prepared {
             Some(Prepared { program, cwd, image }) => (program, cwd, image),
@@ -324,15 +320,17 @@ impl Command {
         let env_buf = env_blob(&capture);
 
         // **The routing rule.**
-        // A caller that endowed a handle or named an extra slot has decided what
-        // its child holds, and the launcher would overwrite that decision with
-        // a manifest row — so those spawn directly. Everything else asks the
-        // launcher when it holds one, and falls back for a program the image
-        // does not declare. A caller with no `launcher` connector gets plain
+        // A caller that endowed a handle, named an extra slot or named the image
+        // has decided what its child holds or runs, and the launcher would
+        // overwrite that decision with a manifest row — so those spawn directly.
+        // Everything else asks the launcher when it holds one, and falls back for
+        // a program the image does not declare. A caller with no `launcher` connector gets plain
         // inheritance, which is what a program endowed nothing should get —
         // of everything but `HOME` (`direct_env`). A child asked of the supervisor is a
         // launch or nothing.
-        let decided = !self.endowments.is_empty() || !self.extra_slots.is_empty();
+        let decided = !self.endowments.is_empty()
+            || !self.extra_slots.is_empty()
+            || self.image_path.is_some();
         let mut home_from_supervisor = None;
         if !decided {
             match self.launch(&resolved, &argv_buf, &env_buf, &cwd, &slot_map)? {
@@ -377,26 +375,23 @@ impl Command {
         // A program on a file server is read here, into a memory object of
         // this process's own that the kernel pages the child from: the kernel
         // opens only what it serves itself.
+        let source = self.image_path.as_deref().unwrap_or(&resolved);
         let image = match prepared_image {
             Some(image) => Some(image),
-            None => {
-                // `image_from` forces a read from the path it names; otherwise
-                // only a file server's program is read here, a kernel-served one
-                // being opened by the kernel from `argv[0]`.
-                let source = self.image_path.as_deref().unwrap_or(resolved.as_os_str());
-                let read = self.image_path.is_some() || crate::sys::fs::is_served(Path::new(source));
-                read.then(|| crate::sys::fs::read_image(Path::new(source)))
-                    .transpose()
-                    .map_err(|e| {
-                        if let Some(handle) = inherited {
-                            toyos_abi::syscall::close(handle);
-                        }
-                        e
-                    })?
+            None if crate::sys::fs::is_served(Path::new(source)) => {
+                Some(crate::sys::fs::read_image(Path::new(source)).map_err(|e| {
+                    if let Some(handle) = inherited {
+                        toyos_abi::syscall::close(handle);
+                    }
+                    e
+                })?)
             }
+            None => None,
         };
 
         let spawn_args = toyos_abi::syscall::SpawnArgs {
+            path_ptr: source.as_encoded_bytes().as_ptr().expose_provenance() as u64,
+            path_len: source.len() as u64,
             argv_ptr: argv_buf.as_ptr().expose_provenance() as u64,
             argv_len: argv_buf.len() as u64,
             slot_map_ptr: slot_map.as_ptr().expose_provenance() as u64,

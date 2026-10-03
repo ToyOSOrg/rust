@@ -54,17 +54,13 @@ pub trait CommandExt {
     #[stable(feature = "toyos_ext", since = "1.0.0")]
     fn prepare(&mut self) -> crate::io::Result<&mut Self>;
 
-    /// Read the child's image from `path` rather than from the program named as
-    /// `argv[0]`.
+    /// Run the program at `path` rather than the one the command names, which
+    /// stays the child's `argv[0]`: the kernel opens `path`, or the spawn reads
+    /// it when a file server serves it, and nothing opens `argv[0]`.
     ///
-    /// The kernel opens `argv[0]` for the image only when the caller passes
-    /// none; passing one read from `path` leaves `argv[0]` a name alone. The
-    /// supervisor's launcher names a declared program's own path here, so a
-    /// caller-writable `argv[0]` — a symlink the caller can re-point between
-    /// the launcher resolving the row and the kernel loading it — cannot swap
-    /// the bytes that program runs. The read is taken by
-    /// [`prepare`](CommandExt::prepare) or by the spawn, from whichever mount
-    /// `path` is on.
+    /// **A spawn, never a launch.** The launcher runs the program its manifest
+    /// row names, so with [`under_supervisor`](CommandExt::under_supervisor) or
+    /// [`provide`](CommandExt::provide) the spawn answers `PermissionDenied`.
     #[stable(feature = "toyos_ext", since = "1.0.0")]
     fn image_from(&mut self, path: &crate::path::Path) -> &mut Self;
 
