@@ -4,9 +4,12 @@ use crate::spec::{
 
 pub(crate) fn opts() -> TargetOptions {
     // ToyOS has no symbol interposition: a shared object binds its own
-    // definitions when it is linked.
-    let pre_link_args =
-        TargetOptions::link_args(LinkerFlavor::Gnu(Cc::No, Lld::No), &["-Bsymbolic"]);
+    // definitions when it is linked. A killed program's crash record carries
+    // its build-id, so its frames are named from the build that ran.
+    let pre_link_args = TargetOptions::link_args(
+        LinkerFlavor::Gnu(Cc::No, Lld::No),
+        &["-Bsymbolic", "--build-id"],
+    );
 
     TargetOptions {
         os: Os::ToyOs,
