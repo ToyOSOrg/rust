@@ -506,7 +506,9 @@ impl Command {
         // own manifest row plus this connector, and only the launcher can build
         // that. Without one there is no weaker thing to fall back to that would
         // still be what the caller asked for.
-        let Ok(conn) = toyos::endow::service("launcher") else {
+        let Some(conn) =
+            toyos::endow::launcher().and_then(|held| held.open(toyos::launch::LAUNCHER).ok())
+        else {
             return if self.provided.is_empty() {
                 direct(None)
             } else {
