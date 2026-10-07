@@ -48,6 +48,7 @@ cfg_select! {
         use windows as imp;
     }
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/paths.rs"]
         mod toyos;
         use toyos as imp;
     }

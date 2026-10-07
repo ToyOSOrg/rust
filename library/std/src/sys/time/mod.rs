@@ -27,6 +27,7 @@ cfg_select! {
         use unix as imp;
     }
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/time.rs"]
         mod toyos;
         use toyos as imp;
     }

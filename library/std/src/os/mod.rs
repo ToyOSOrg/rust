@@ -137,6 +137,7 @@ pub mod solaris;
 #[cfg(target_os = "solid_asp3")]
 pub mod solid;
 #[cfg(target_os = "toyos")]
+#[path = "../../../../../sdk/std/os/mod.rs"]
 pub mod toyos;
 #[cfg(target_os = "trusty")]
 pub mod trusty;

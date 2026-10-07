@@ -16,6 +16,7 @@ cfg_select! {
         use motor as imp;
     }
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/process.rs"]
         mod toyos;
         use toyos as imp;
     }

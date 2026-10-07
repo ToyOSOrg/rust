@@ -116,6 +116,7 @@ cfg_select! {
         pub use unsupported::{current_os_id, set_name};
     }
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/thread.rs"]
         mod toyos;
         pub use toyos::{Thread, available_parallelism, current_os_id, set_name, sleep, yield_now, DEFAULT_MIN_STACK_SIZE};
     }

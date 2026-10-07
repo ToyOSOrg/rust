@@ -16,6 +16,7 @@ mod common;
 
 cfg_select! {
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/args.rs"]
         mod toyos;
         pub use toyos::*;
     }

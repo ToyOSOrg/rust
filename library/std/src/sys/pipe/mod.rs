@@ -2,6 +2,7 @@
 
 cfg_select! {
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/pipe.rs"]
         mod toyos;
         pub use toyos::{Pipe, pipe};
     }

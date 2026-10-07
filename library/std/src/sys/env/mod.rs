@@ -53,6 +53,7 @@ cfg_select! {
         pub use xous::*;
     }
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/env.rs"]
         mod toyos;
         pub use toyos::*;
     }

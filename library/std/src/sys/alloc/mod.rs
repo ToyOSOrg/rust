@@ -98,6 +98,7 @@ cfg_select! {
         use uefi as imp;
     }
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/alloc.rs"]
         mod toyos;
         use toyos as imp;
     }

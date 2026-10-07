@@ -80,6 +80,7 @@ cfg_select! {
         pub use teeos::fill_bytes;
     }
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/random.rs"]
         mod toyos;
         pub use toyos::fill_bytes;
     }

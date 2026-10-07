@@ -30,6 +30,7 @@ cfg_select! {
         pub use uefi::*;
     }
     target_os = "toyos" => {
+        #[path = "../../../../../../../sdk/std/sys/net/connection.rs"]
         mod toyos;
         pub use toyos::*;
     }

@@ -42,6 +42,7 @@ cfg_select! {
         use uefi as imp;
     }
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/fs.rs"]
         mod toyos;
         use toyos as imp;
         pub use toyos::{chdir, is_served, read_image};

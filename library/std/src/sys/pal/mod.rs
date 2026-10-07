@@ -61,6 +61,7 @@ cfg_select! {
         pub use self::zkvm::*;
     }
     target_os = "toyos" => {
+        #[path = "../../../../../../sdk/std/sys/pal/mod.rs"]
         mod toyos;
         pub use self::toyos::*;
     }
