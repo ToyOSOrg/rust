@@ -93,9 +93,9 @@ codegen-units = 1
 # For git dependencies, also add your source to ALLOWED_SOURCES in src/tools/tidy/src/extdeps.rs.
 [patch.crates-io]
 toyos-abi = { path = "../toyos-abi" }
-libloading = { git = "https://github.com/Japabu/rust_libloading", branch = "toyos" }
-memmap2 = { git = "https://github.com/Japabu/memmap2-rs", branch = "toyos" }
-stacker = { git = "https://github.com/Japabu/stacker", branch = "toyos" }
-getrandom = { git = "https://github.com/Japabu/getrandom", branch = "toyos-0.2", package = "getrandom" }
-getrandom03 = { git = "https://github.com/Japabu/getrandom", branch = "toyos-0.3", package = "getrandom" }
-ctrlc = { git = "https://github.com/Japabu/rust-ctrlc", branch = "toyos" }
+libloading = { git = "https://github.com/ToyOSOrg/rust_libloading", branch = "toyos" }
+memmap2 = { git = "https://github.com/ToyOSOrg/memmap2-rs", branch = "toyos" }
+stacker = { git = "https://github.com/ToyOSOrg/stacker", branch = "toyos" }
+getrandom = { git = "https://github.com/ToyOSOrg/getrandom", branch = "toyos-0.2", package = "getrandom" }
+getrandom03 = { git = "https://github.com/ToyOSOrg/getrandom", branch = "toyos-0.3", package = "getrandom" }
+ctrlc = { git = "https://github.com/ToyOSOrg/rust-ctrlc", branch = "toyos" }

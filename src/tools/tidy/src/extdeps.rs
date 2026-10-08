@@ -47,7 +47,7 @@ pub fn check(root: &Path, tidy_ctx: TidyCtx) {
 
             // Ensure source is allowed.
             if !ALLOWED_SOURCES.contains(&source)
-                && !source.starts_with(r#""git+https://github.com/Japabu/"#)
+                && !source.starts_with(r#""git+https://github.com/ToyOSOrg/"#)
             {
                 check.error(format!("invalid source: {}", source));
             }
