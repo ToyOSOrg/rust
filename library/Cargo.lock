@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "toyos"
-version = "0.1.0"
+version = "0.18.0"
 dependencies = [
  "rustc-std-workspace-core",
  "toyos-abi",
@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "toyos-abi"
-version = "0.1.0"
+version = "0.16.0"
 dependencies = [
  "rustc-std-workspace-core",
 ]

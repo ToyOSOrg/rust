@@ -5853,6 +5853,8 @@ checksum = "d282ade6016312faf3e41e57ebbba0c073e4056dab1232ab1cb624199648f8ed"
 [[package]]
 name = "toyos-abi"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fce2965bd320e8da58a50d08e58e90a16438919cf647cf3c8af119b0841e28cd"
 
 [[package]]
 name = "tracing"
