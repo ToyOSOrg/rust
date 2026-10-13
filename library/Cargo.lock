@@ -387,11 +387,27 @@ version = "0.18.0"
 dependencies = [
  "rustc-std-workspace-core",
  "toyos-abi",
+ "toyos-transport",
 ]
 
 [[package]]
 name = "toyos-abi"
 version = "0.16.0"
+dependencies = [
+ "rustc-std-workspace-core",
+]
+
+[[package]]
+name = "toyos-transport"
+version = "0.1.0"
+dependencies = [
+ "rustc-std-workspace-core",
+ "toyos-untrusted",
+]
+
+[[package]]
+name = "toyos-untrusted"
+version = "0.1.0"
 dependencies = [
  "rustc-std-workspace-core",
 ]
