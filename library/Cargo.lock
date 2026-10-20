@@ -402,14 +402,6 @@ name = "toyos-transport"
 version = "0.1.0"
 dependencies = [
  "rustc-std-workspace-core",
- "toyos-untrusted",
-]
-
-[[package]]
-name = "toyos-untrusted"
-version = "0.1.0"
-dependencies = [
- "rustc-std-workspace-core",
 ]
 
 [[package]]
