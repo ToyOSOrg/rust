@@ -159,9 +159,10 @@ impl BorrowedFd<'_> {
     #[cfg(target_os = "toyos")]
     #[stable(feature = "io_safety", since = "1.63.0")]
     pub fn try_clone_to_owned(&self) -> io::Result<OwnedFd> {
-        let new_fd = toyos::net::stream::duplicate(toyos_abi::RawHandle(self.as_raw_fd() as u32))
-            .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
-        Ok(unsafe { OwnedFd::from_raw_fd(new_fd.0 as RawFd) })
+        // A second descriptor on the same object, not inherited, as std
+        // creates every descriptor.
+        let new_fd = toyos::fd::dup(self.as_raw_fd(), 0, false).map_err(crate::sys::fd_error)?;
+        Ok(unsafe { OwnedFd::from_raw_fd(new_fd) })
     }
 }
 
@@ -213,8 +214,8 @@ impl FromRawFd for OwnedFd {
 #[stable(feature = "io_safety", since = "1.63.0")]
 impl Drop for OwnedFd {
     #[inline]
-    // ToyOS closes a handle with a safe call, so the block this shares with
-    // every `libc::close` below has nothing unsafe left in it there.
+    // ToyOS closes a descriptor with a safe call, so the block this shares
+    // with every `libc::close` below has nothing unsafe left in it there.
     #[cfg_attr(target_os = "toyos", allow(unused_unsafe))]
     fn drop(&mut self) {
         unsafe {
@@ -239,9 +240,7 @@ impl Drop for OwnedFd {
             #[cfg(target_os = "hermit")]
             let _ = hermit_abi::close(self.fd.as_inner());
             #[cfg(target_os = "toyos")]
-            {
-                toyos::net::stream::let_go(toyos_abi::RawHandle(self.fd.as_inner() as u32));
-            }
+            let _ = toyos::fd::close(self.fd.as_inner());
         }
     }
 }
