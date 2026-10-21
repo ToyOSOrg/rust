@@ -385,6 +385,7 @@ dependencies = [
 name = "toyos"
 version = "0.18.0"
 dependencies = [
+ "rustc-std-workspace-alloc",
  "rustc-std-workspace-core",
  "toyos-abi",
 ]
