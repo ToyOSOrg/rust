@@ -214,9 +214,6 @@ impl FromRawFd for OwnedFd {
 #[stable(feature = "io_safety", since = "1.63.0")]
 impl Drop for OwnedFd {
     #[inline]
-    // ToyOS closes a descriptor with a safe call, so the block this shares
-    // with every `libc::close` below has nothing unsafe left in it there.
-    #[cfg_attr(target_os = "toyos", allow(unused_unsafe))]
     fn drop(&mut self) {
         unsafe {
             // Note that errors are ignored when closing a file descriptor. According to POSIX 2024,
