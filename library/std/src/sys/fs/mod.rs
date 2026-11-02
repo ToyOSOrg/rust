@@ -45,7 +45,7 @@ cfg_select! {
         #[path = "../../../../../../sdk/std/sys/fs.rs"]
         mod toyos;
         use toyos as imp;
-        pub use toyos::{chdir, is_served, read_image};
+        pub use toyos::{chdir, read_image};
     }
     target_os = "vexos" => {
         mod vexos;
